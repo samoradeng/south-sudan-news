@@ -1,0 +1,382 @@
+/* Reset some basic elements */
+body, h1, button {
+    margin: 0;
+    padding: 0;
+  }
+
+  header {
+    position: relative;
+    width: 100%;
+    margin: 0px;
+    align-items: center;
+}
+
+#header-logo-title{
+    display: flex;
+    flex-direction: row;
+    margin-left: 16px;
+    align-items: center;
+    margin-top: 16px;
+    gap: 8px;
+}
+ 
+#header-img {
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+}
+
+#news-container {
+    margin-top: 80px;
+}
+  
+  /* Use system fonts for better performance and consistency */
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #1d1d1d;
+    line-height: 20px;
+  }
+  
+  /* Ensure full width and height */
+  html, body {
+    height: 100%;
+    width: 100%;
+  }
+  
+  /* Header styles */
+  header {
+    background-color: white;
+    color: #1d1d1d;
+    padding: 16px;
+    text-align:left;
+    font-weight:normal;
+    border-bottom: 1px solid  rgb(218, 220, 224);
+    position: fixed;
+    top: 0;
+  }
+  
+  
+  
+  /* Navigation styles */
+  nav {
+    margin-bottom: 1em;
+  }
+  
+  /* Button styles */
+  button {
+    background-color: #0069D9;
+    border: none;
+    border-radius: 5px;
+    color: white;
+    padding: 0.75em 1.5em;
+    font-size: 1em;
+    cursor: pointer;
+    transition: background-color 0.3s;
+  }
+  
+  button:hover {
+    background-color: #0056B3;
+  }
+  
+  /* Main content styles */
+  main {
+    padding: 1em;
+  }
+  
+  /* News article styles */
+  .article {
+    display: flex;
+    flex-direction: column; /* Stack elements vertically on mobile */
+    border-bottom: 1px solid #dddddd;
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-top: 24px;
+    padding-bottom: 24px;
+    overflow: hidden; /* Ensures content fits within the article */
+    align-items: flex-start;
+    margin-bottom: 8px;
+    background-color: white;
+    text-decoration: none; /* Remove underline from links */
+    color: inherit; /* Keep the text color consistent with the rest of the article */
+    
+  }
+  
+  .article:hover, .article:active, .article:visited {
+    text-decoration: none; /* Remove underline from links on hover/active/visited */
+  }
+  
+  .article:last-child {
+    border-bottom: none;
+  }
+  
+  .article-title {
+    font-size: 16px;
+    color: #242424;
+    text-decoration: none;
+    margin: 0;
+    font-weight: 700;
+    margin-bottom: 8px; /* Space after title */
+    margin-top: 8px;
+  }
+  
+  .article-summary {
+    display: none;
+    line-height: 145%;
+    cursor: pointer;
+  }
+  
+  .article-meta {
+    color: #666;
+    font-style: italic;
+    margin-top: 0.5em;
+  }
+  
+  /* Styles for the article logo, image, and timestamp */
+  .article-logo {
+    width: 24px; /* Adjust size as needed */
+    height: 24px; /* Adjust size as needed */
+    background-size: cover;
+    border-radius: 50%;
+    flex-shrink: 0; /* Prevent logo from shrinking */
+  }
+  
+  .article-source {
+    font-weight: normal;
+    color: #1d1d1d;
+    white-space: wrap; /* Prevent source from wrapping */
+    overflow: hidden;
+    text-overflow: ellipsis; /* Show an ellipsis when text overflows */
+    flex-grow: 1; /* Allow the source to take up remaining space */
+  }
+  
+  
+  .article-header {
+    display: flex;
+    align-items: center; /* Align items vertically */
+    justify-content: start; /* Align items to the start of the container */
+    gap: 10px; /* Add some space between the items */
+  }
+  
+  .article-image {
+    width: 100%; /* Full width images for mobile */
+    height: auto;
+    border-radius: 8px;
+    order: -1; /* Image on top for mobile view */
+    
+  }
+  
+  
+  .time-since {
+    font-weight: normal;
+    color: #555;
+    font-size: 13px;
+    height: 16px;
+    margin-left: auto;
+    white-space: nowrap; /* Prevent time from wrapping */
+    flex-shrink: 0; /* Prevent time from shrinking */
+  }
+  
+  /* Clear float */
+  .article-content {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    /* This will push the image to the right */
+    margin-top: 0px;
+  }
+  
+  /* Responsive design adjustments */
+  @media (min-width: 600px) {
+    .article-image {
+      width: 120px; /* Larger width for the image on wider screens */
+      height: 120px; /* Larger height for the image on wider screens */
+    }
+  
+    .article-title {
+      font-size: 24px;
+      cursor: pointer;
+    }
+  
+    .article-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 16px;
+      }
+  }
+  
+  #article-page {
+    max-width: 680px;
+    margin: 20px auto;
+    padding: 20px;
+    line-height: 1.6;
+    font-family: Georgia, 'Times New Roman', Times, serif;
+  }
+  
+   h1 {
+    font-size: 24px;
+    padding-left: 0px;
+    
+    cursor: pointer;
+  }
+  
+  .full-article-image {
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+    margin-bottom: 20px;
+  }
+  
+  #article-page p {
+    font-size: 1.1em;
+    margin-bottom: 20px;
+  }
+  
+  #article-page a {
+    color: #1a8917;
+    text-decoration: none;
+    font-size: 1em;
+  }
+  
+  /* Add a back button */
+  #back-button {
+    display: block;
+    margin: 20px auto;
+    padding: 10px 15px;
+    background-color: #007BFF;
+    color: white;
+    text-align: center;
+    border-radius: 5px;
+    text-decoration: none;
+    width: 100px;
+  }
+  
+
+  
+  
+  
+  .featured-article .article-title {
+    font-size: 24px; /* Larger font size for featured titles */
+    margin-bottom: 16px; /* Space after title */
+    margin-top: 8px;
+    line-height: 125%;
+  }
+  
+  .featured-article .article-summary {
+    display: block; /* Show summary for featured articles */
+    font-size: 1em; /* Adjust summary font size as needed */
+    color: #333; /* Darker text for better readability */
+    margin: 0px;
+  }
+
+  .featured-article .article-image {
+    margin-bottom: 16px;
+  }
+  .article:not(.featured-article) {
+    flex-direction: row; /* Side-by-side layout on mobile for regular articles */
+  }
+
+  /* Adjustments for the rest of the articles */
+.article:not(.featured-article) .article-image {
+  width: 120px; /* Fixed size for regular article images */
+  height: 120px;
+  border-radius: 4px;
+  object-fit: cover;
+  margin-left: 15px;
+  order: 2;
+}
+  
+  .article:not(.featured-article) .article-title {
+    font-size: 16px; /* Smaller font size for regular titles */
+    line-height: 145%;
+  }
+  
+  .article:not(.featured-article) .article-summary {
+    display: none; /* Hide summary for regular articles */
+  }
+
+
+  /* Center content for iPad and desktop */
+@media (min-width: 768px) {
+
+    .article {
+        border-radius: 16px;
+        border: solid 1px rgb(218, 220, 224);
+        width: 560px;
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        padding: 24px;
+        
+    }
+    
+    .article-image{
+        border-radius: 8px;
+    }
+
+    .article-content {
+      max-width: 560px; /* Maximum width for content */
+      
+    }
+
+    #news-container {
+        display: flex;
+        flex-direction: column;
+        max-width: 560px;
+        align-items:flex-start;
+        justify-content: center;
+        
+        margin-top: 96px;
+        border-radius: 16px;
+    }
+
+    body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background-color: #F0F2F5;
+    }
+
+    header {
+        position: fixed;
+        width: 100%;
+    }
+  
+    .featured-article {
+        display: flex;
+        flex-direction: row-reverse;
+        padding: 24px;
+    }
+    
+    
+    .featured-article .article-image {
+      border-radius: 8px; /* Slightly rounded corners for aesthetics */
+      width: 120px;
+      height: 120px;
+      margin-left: 16px;
+    }
+
+    .featured-article .article-header {
+        margin-top: 0px;
+    }
+
+  }
+  
+  /* Further adjustments for desktop */
+  @media (min-width: 1024px) {
+    .article:not(.featured-article) .article-image {
+      width: 120px; /* Larger images for desktop */
+      height: 120px;
+      border-radius: 8px;
+    }
+    
+  }
+
+
+
+
+
+
+
+  
