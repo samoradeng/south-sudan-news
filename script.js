@@ -2,7 +2,7 @@
 let isLoadingNews = false;
 let hasMoreNews = true;
 let newsOffset = 0;
-const count = 5; // Fetch 50 articles at a time
+const count = 10; // Fetch 50 articles at a time
 let allArticles = []; // Store all fetched articles
 
 // API configuration
