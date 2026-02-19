@@ -1,0 +1,87 @@
+const express = require('express');
+const path = require('path');
+const NodeCache = require('node-cache');
+const { fetchAllSources } = require('./fetcher');
+const { clusterArticles } = require('./cluster');
+const { initGroq, summarizeClusters } = require('./summarizer');
+
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Cache: articles for 15 minutes, summaries for 30 minutes
+const cache = new NodeCache();
+const ARTICLES_TTL = 15 * 60;
+const CLUSTERS_TTL = 30 * 60;
+
+// Initialize Groq if API key is available (free tier)
+if (process.env.GROQ_API_KEY) {
+  initGroq(process.env.GROQ_API_KEY);
+  console.log('Groq AI summarization enabled');
+} else {
+  console.log('No GROQ_API_KEY found — running without AI summaries (extractive fallback)');
+  console.log('Get a free key at https://console.groq.com to enable AI summaries');
+}
+
+// Serve static frontend
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// API: Get clustered, summarized news
+app.get('/api/news', async (req, res) => {
+  try {
+    // Check cache first
+    const cached = cache.get('clusters');
+    if (cached) {
+      return res.json(cached);
+    }
+
+    // Fetch from all sources
+    console.log('Fetching articles from all sources...');
+    const articles = await fetchAllSources();
+    console.log(`Fetched ${articles.length} articles total`);
+
+    if (articles.length === 0) {
+      return res.json({ clusters: [], totalArticles: 0, sources: [] });
+    }
+
+    // Cluster related articles
+    const clusters = clusterArticles(articles);
+    console.log(`Grouped into ${clusters.length} story clusters`);
+
+    // Summarize each cluster
+    const summarized = await summarizeClusters(clusters);
+
+    const response = {
+      clusters: summarized,
+      totalArticles: articles.length,
+      sources: [...new Set(articles.map((a) => a.source))],
+      lastUpdated: new Date().toISOString(),
+    };
+
+    cache.set('clusters', response, CLUSTERS_TTL);
+    res.json(response);
+  } catch (err) {
+    console.error('Error in /api/news:', err);
+    res.status(500).json({ error: 'Failed to fetch news' });
+  }
+});
+
+// API: Force refresh (bypass cache)
+app.post('/api/news/refresh', async (req, res) => {
+  cache.del('clusters');
+  res.json({ message: 'Cache cleared. Next request will fetch fresh data.' });
+});
+
+// API: Health check
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    aiEnabled: !!process.env.GROQ_API_KEY,
+    cacheStats: cache.getStats(),
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`South Sudan News running at http://localhost:${PORT}`);
+});
