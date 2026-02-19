@@ -102,6 +102,9 @@ function clusterArticles(articles, similarityThreshold = 0.35) {
       .toISOString();
     cluster.category = cluster.primaryArticle.sourceCategory;
 
+    // Pick the best available image from any article in the cluster
+    cluster.image = cluster.articles.find((a) => a.image)?.image || null;
+
     clusters.push(cluster);
   }
 
