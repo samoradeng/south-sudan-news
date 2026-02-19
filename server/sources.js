@@ -8,7 +8,7 @@ const sources = [
   },
   {
     name: 'ReliefWeb',
-    url: 'https://reliefweb.int/updates/rss.xml?advanced-search=%28PC8657%29',
+    url: 'https://news.google.com/rss/search?q=%22south+sudan%22+site:reliefweb.int&hl=en-US&gl=US&ceid=US:en',
     category: 'humanitarian',
     reliability: 'high',
   },
