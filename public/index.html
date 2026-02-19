@@ -6,21 +6,22 @@
   <title>South Sudan News</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
+  <!-- Header -->
   <header>
     <div class="header-inner">
-      <div class="header-left">
-        <img src="images/SSN_logo.svg" alt="SSN" class="logo" onclick="window.scrollTo({top:0,behavior:'smooth'})">
-        <h1>South Sudan News</h1>
+      <div class="header-left" id="home-btn">
+        <img src="images/SSN_logo.svg" alt="SSN" class="logo">
+        <span class="header-title">South Sudan News</span>
       </div>
       <div class="header-right">
         <div class="source-count" id="source-count"></div>
-        <button class="refresh-btn" id="refresh-btn" title="Refresh">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button class="refresh-btn" id="refresh-btn" title="Refresh news">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"></polyline>
             <polyline points="1 20 1 14 7 14"></polyline>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
@@ -30,36 +31,85 @@
     </div>
   </header>
 
+  <!-- Category nav (visible in feed view) -->
   <nav class="category-nav" id="category-nav">
-    <button class="category-btn active" data-category="all">All</button>
-    <button class="category-btn" data-category="local">Local</button>
-    <button class="category-btn" data-category="regional">Regional</button>
-    <button class="category-btn" data-category="international">International</button>
-    <button class="category-btn" data-category="humanitarian">Humanitarian</button>
+    <div class="category-nav-inner">
+      <button class="category-btn active" data-category="all">For You</button>
+      <button class="category-btn" data-category="local">Local</button>
+      <button class="category-btn" data-category="regional">Regional</button>
+      <button class="category-btn" data-category="international">International</button>
+      <button class="category-btn" data-category="humanitarian">Humanitarian</button>
+    </div>
   </nav>
 
-  <main>
-    <div id="loading" class="loading-state">
-      <div class="spinner"></div>
-      <p>Gathering news from multiple sources...</p>
-    </div>
+  <!-- Feed View -->
+  <div id="feed-view">
+    <main class="feed-main">
+      <div id="loading" class="loading-state">
+        <div class="spinner"></div>
+        <p>Gathering news from multiple sources...</p>
+      </div>
 
-    <div id="error" class="error-state" style="display:none">
-      <p>Failed to load news. Please try again.</p>
-      <button onclick="loadNews()">Retry</button>
-    </div>
+      <div id="error" class="error-state" style="display:none">
+        <p>Failed to load news. Please try again.</p>
+        <button onclick="loadNews()">Retry</button>
+      </div>
 
-    <div id="empty" class="empty-state" style="display:none">
-      <p>No South Sudan news found right now. Check back later.</p>
-    </div>
+      <div id="empty" class="empty-state" style="display:none">
+        <p>No South Sudan news found right now. Check back later.</p>
+      </div>
 
-    <div id="stories" class="stories-grid"></div>
-  </main>
+      <div id="stories" class="stories-grid"></div>
+    </main>
+  </div>
 
+  <!-- Story Detail View (hidden by default) -->
+  <div id="story-view" style="display:none">
+    <main class="story-main">
+      <button class="back-btn" id="back-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="19" y1="12" x2="5" y2="12"></line>
+          <polyline points="12 19 5 12 12 5"></polyline>
+        </svg>
+        Back
+      </button>
+
+      <div id="story-content">
+        <!-- Populated by JS -->
+      </div>
+
+      <!-- Follow-up question -->
+      <div class="followup-section" id="followup-section">
+        <div class="followup-input-wrap">
+          <svg class="followup-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          <input type="text" id="followup-input" placeholder="Ask a follow-up question..." autocomplete="off">
+          <button id="followup-send" class="followup-send" title="Ask">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+        <div id="followup-answer" class="followup-answer" style="display:none"></div>
+      </div>
+
+      <!-- Discover more -->
+      <div class="discover-section" id="discover-section" style="display:none">
+        <h3 class="discover-heading">Discover more</h3>
+        <div id="related-stories" class="related-grid"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
   <footer>
     <div class="footer-inner">
-      <p>Aggregated from <span id="footer-sources"></span> sources. Updated <span id="last-updated"></span>.</p>
-      <p class="footer-note">South Sudan News gathers articles from free, publicly available RSS feeds and uses AI to summarize related stories.</p>
+      <p>Aggregated from <span id="footer-sources"></span> sources &middot; Updated <span id="last-updated"></span></p>
+      <p class="footer-note">South Sudan News gathers articles from publicly available RSS feeds and uses AI to synthesize related stories.</p>
     </div>
   </footer>
 

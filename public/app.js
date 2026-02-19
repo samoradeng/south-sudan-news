@@ -1,8 +1,16 @@
-// State
+// ═══════════════════════════════════════════════════════════════
+// South Sudan News — Perplexity-inspired client
+// ═══════════════════════════════════════════════════════════════
+
+// ─── State ──────────────────────────────────────────────────────
 let allClusters = [];
 let activeCategory = 'all';
+let currentStoryIndex = null;
 
-// DOM elements
+// ─── DOM elements ───────────────────────────────────────────────
+const feedView = document.getElementById('feed-view');
+const storyView = document.getElementById('story-view');
+const categoryNav = document.getElementById('category-nav');
 const storiesEl = document.getElementById('stories');
 const loadingEl = document.getElementById('loading');
 const errorEl = document.getElementById('error');
@@ -11,17 +19,34 @@ const sourceCountEl = document.getElementById('source-count');
 const footerSourcesEl = document.getElementById('footer-sources');
 const lastUpdatedEl = document.getElementById('last-updated');
 const refreshBtn = document.getElementById('refresh-btn');
+const homeBtn = document.getElementById('home-btn');
+const backBtn = document.getElementById('back-btn');
+const storyContent = document.getElementById('story-content');
+const followupSection = document.getElementById('followup-section');
+const followupInput = document.getElementById('followup-input');
+const followupSend = document.getElementById('followup-send');
+const followupAnswer = document.getElementById('followup-answer');
+const discoverSection = document.getElementById('discover-section');
+const relatedStories = document.getElementById('related-stories');
 
-// Load news on startup
+// ─── Initialize ─────────────────────────────────────────────────
 loadNews();
 
-// Refresh button
+// ─── Event Listeners ────────────────────────────────────────────
+
+// Refresh
 refreshBtn.addEventListener('click', async () => {
   refreshBtn.classList.add('spinning');
   await fetch('/api/news/refresh', { method: 'POST' });
   await loadNews();
   refreshBtn.classList.remove('spinning');
 });
+
+// Home button
+homeBtn.addEventListener('click', () => showFeed());
+
+// Back button
+backBtn.addEventListener('click', () => showFeed());
 
 // Category filters
 document.querySelectorAll('.category-btn').forEach((btn) => {
@@ -33,6 +58,29 @@ document.querySelectorAll('.category-btn').forEach((btn) => {
   });
 });
 
+// Follow-up question
+followupInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && followupInput.value.trim()) {
+    askFollowUp();
+  }
+});
+followupSend.addEventListener('click', () => {
+  if (followupInput.value.trim()) {
+    askFollowUp();
+  }
+});
+
+// Browser back/forward
+window.addEventListener('popstate', (e) => {
+  if (e.state?.view === 'story') {
+    openStory(e.state.index, true);
+  } else {
+    showFeed(true);
+  }
+});
+
+// ─── Feed Loading ───────────────────────────────────────────────
+
 async function loadNews() {
   showLoading();
   try {
@@ -42,10 +90,11 @@ async function loadNews() {
 
     allClusters = data.clusters || [];
 
-    // Update metadata
     sourceCountEl.textContent = `${data.sources?.length || 0} sources`;
     footerSourcesEl.textContent = data.sources?.length || 0;
-    lastUpdatedEl.textContent = data.lastUpdated ? formatTimeAgo(new Date(data.lastUpdated)) : 'just now';
+    lastUpdatedEl.textContent = data.lastUpdated
+      ? formatTimeAgo(new Date(data.lastUpdated))
+      : 'just now';
 
     if (allClusters.length === 0) {
       showEmpty();
@@ -58,11 +107,17 @@ async function loadNews() {
   }
 }
 
+// ─── Feed Rendering ─────────────────────────────────────────────
+
 function renderStories() {
   const filtered =
     activeCategory === 'all'
       ? allClusters
-      : allClusters.filter((c) => c.category === activeCategory || c.articles.some((a) => a.sourceCategory === activeCategory));
+      : allClusters.filter(
+          (c) =>
+            c.category === activeCategory ||
+            c.articles.some((a) => a.sourceCategory === activeCategory)
+        );
 
   if (filtered.length === 0) {
     storiesEl.innerHTML = '';
@@ -76,82 +131,357 @@ function renderStories() {
   loadingEl.style.display = 'none';
   errorEl.style.display = 'none';
 
-  storiesEl.innerHTML = filtered.map((cluster, i) => createStoryCard(cluster, i === 0)).join('');
+  // Build: hero card + grid of regular cards
+  const hero = filtered[0];
+  const heroIndex = allClusters.indexOf(hero);
+  const rest = filtered.slice(1);
+
+  let html = createHeroCard(hero, heroIndex);
+
+  if (rest.length > 0) {
+    html += '<div class="stories-grid-regular">';
+    rest.forEach((cluster) => {
+      const idx = allClusters.indexOf(cluster);
+      html += createRegularCard(cluster, idx);
+    });
+    html += '</div>';
+  }
+
+  storiesEl.innerHTML = html;
+
+  // Attach click handlers
+  storiesEl.querySelectorAll('[data-story-index]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      // Don't intercept link clicks
+      if (e.target.closest('a')) return;
+      const idx = parseInt(el.dataset.storyIndex);
+      openStory(idx);
+    });
+  });
 }
 
-function createStoryCard(cluster, featured) {
+function createHeroCard(cluster, index) {
   const primary = cluster.primaryArticle;
   const timeAgo = formatTimeAgo(new Date(cluster.latestDate));
   const category = cluster.category || 'general';
 
-  // Source tags (show up to 4 unique sources)
-  const sourceTags = cluster.articles
-    .reduce((acc, a) => {
-      if (!acc.find((x) => x.source === a.source)) {
-        acc.push(a);
-      }
-      return acc;
-    }, [])
-    .slice(0, 4)
-    .map((a) => `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" class="source-tag">${escapeHtml(a.source)}</a>`)
-    .join('');
-
-  const extraCount = cluster.sourceCount > 4 ? `<span class="story-source-count">+${cluster.sourceCount - 4} more</span>` : '';
-
-  const summaryHtml = cluster.summary
-    ? `<p class="story-summary">${escapeHtml(cluster.summary)}</p>`
-    : '';
-
   const imageHtml = cluster.image
-    ? `<div class="story-image"><img src="${escapeHtml(cluster.image)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'"></div>`
+    ? `<div class="hero-image-wrap">
+        <img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+        <span class="hero-image-source">${esc(primary.source)}</span>
+      </div>`
     : '';
+
+  const sourcesHtml = buildSourceFavicons(cluster.articles, 4);
 
   return `
-    <article class="story-card${featured ? ' featured' : ''}">
-      <div class="story-header">
-        <span class="story-category ${category}">${category}</span>
-        <span class="story-time">${timeAgo}</span>
-      </div>
-      <div class="story-body">
-        <div class="story-text">
-          <h2 class="story-title">
-            <a href="${escapeHtml(primary.url)}" target="_blank" rel="noopener">${escapeHtml(primary.title)}</a>
-          </h2>
-          ${summaryHtml}
+    <div class="story-card hero" data-story-index="${index}">
+      ${imageHtml}
+      <div class="hero-body">
+        <h2 class="story-title">${esc(primary.title)}</h2>
+        ${cluster.summary ? `<p class="story-summary">${esc(cluster.summary)}</p>` : ''}
+        <div class="story-meta">
+          <div class="story-sources-row">
+            ${sourcesHtml}
+            <span class="source-count-badge">${cluster.sourceCount} source${cluster.sourceCount !== 1 ? 's' : ''}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="story-category-badge ${category}">${category}</span>
+            <span class="story-time">${timeAgo}</span>
+          </div>
         </div>
-        ${imageHtml}
       </div>
-      <div class="story-footer">
-        <div class="story-sources">
-          ${sourceTags}
-          ${extraCount}
-        </div>
-        ${cluster.articles.length > 1
-          ? `<div class="story-links"><a href="${escapeHtml(primary.url)}" target="_blank" rel="noopener">Read full coverage</a></div>`
-          : ''}
-      </div>
-    </article>
+    </div>
   `;
 }
 
-function formatTimeAgo(date) {
-  const now = new Date();
-  const diffMs = now - date;
-  const minutes = Math.floor(diffMs / 60000);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
+function createRegularCard(cluster, index) {
+  const primary = cluster.primaryArticle;
+  const timeAgo = formatTimeAgo(new Date(cluster.latestDate));
+  const category = cluster.category || 'general';
 
-  if (days > 0) return `${days}d ago`;
-  if (hours > 0) return `${hours}h ago`;
-  if (minutes > 0) return `${minutes}m ago`;
-  return 'just now';
+  const imageHtml = cluster.image
+    ? `<div class="card-image-wrap">
+        <img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+      </div>`
+    : '';
+
+  const sourcesHtml = buildSourceFavicons(cluster.articles, 3);
+
+  return `
+    <div class="story-card regular" data-story-index="${index}">
+      ${imageHtml}
+      <div class="card-body">
+        <h3 class="story-title">${esc(primary.title)}</h3>
+        ${cluster.summary ? `<p class="story-summary">${esc(cluster.summary)}</p>` : ''}
+        <div class="story-meta">
+          <div class="story-sources-row">
+            ${sourcesHtml}
+            <span class="source-count-badge">${cluster.sourceCount}s</span>
+          </div>
+          <span class="story-time">${timeAgo}</span>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
-function escapeHtml(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+// ─── Story Detail View ──────────────────────────────────────────
+
+function openStory(index, fromPopstate) {
+  currentStoryIndex = index;
+  const cluster = allClusters[index];
+  if (!cluster) return;
+
+  // Show story view
+  feedView.style.display = 'none';
+  categoryNav.style.display = 'none';
+  storyView.style.display = 'block';
+
+  // Reset follow-up state
+  followupAnswer.style.display = 'none';
+  followupAnswer.innerHTML = '';
+  followupInput.value = '';
+
+  // Scroll to top
+  window.scrollTo({ top: 0 });
+
+  // Push history state
+  if (!fromPopstate) {
+    history.pushState({ view: 'story', index }, '', `#story-${index}`);
+  }
+
+  // Show skeleton loading
+  storyContent.innerHTML = buildSkeleton(cluster);
+
+  // Show discover more immediately (from cached data)
+  renderDiscoverMore(index);
+
+  // Fetch deep summary
+  fetchDeepSummary(index, cluster);
+}
+
+async function fetchDeepSummary(index, cluster) {
+  try {
+    const res = await fetch(`/api/story/${index}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    renderStoryDetail(data);
+  } catch (err) {
+    console.error('Failed to load deep summary:', err);
+    // Render with what we have from the feed
+    renderStoryDetail({
+      ...cluster,
+      deepSummary: null,
+    });
+  }
+}
+
+function renderStoryDetail(data) {
+  const primary = data.primaryArticle;
+  const timeAgo = formatTimeAgo(new Date(data.latestDate));
+  const deepSummary = data.deepSummary;
+
+  // Header
+  let html = `<div class="story-detail-header">`;
+  html += `<h1 class="story-detail-title">${esc(primary.title)}</h1>`;
+  html += `<div class="story-detail-meta">`;
+  html += `<span class="detail-time">Published ${timeAgo}</span>`;
+  html += `<span class="detail-dot"></span>`;
+  html += `<span class="detail-source-count">${data.sourceCount} source${data.sourceCount !== 1 ? 's' : ''}</span>`;
+  html += `</div>`;
+
+  // Source favicons row
+  html += `<div class="story-detail-sources">`;
+  const uniqueSources = getUniqueSources(data.articles);
+  uniqueSources.forEach((a) => {
+    const domain = getDomain(a.url);
+    html += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="source-favicon">`;
+    if (domain) html += `<img src="https://www.google.com/s2/favicons?domain=${esc(domain)}&sz=16" alt="" onerror="this.style.display='none'">`;
+    html += `${esc(a.source)}</a>`;
+  });
+  html += `</div>`;
+  html += `</div>`;
+
+  // Hero image
+  if (data.image) {
+    const imageSource = data.articles.find((a) => a.image === data.image);
+    html += `<div class="detail-hero-image">`;
+    html += `<img src="${esc(data.image)}" alt="" onerror="this.parentElement.style.display='none'">`;
+    if (imageSource) {
+      html += `<span class="detail-image-source">${esc(imageSource.source)}</span>`;
+    }
+    html += `</div>`;
+  }
+
+  // Sections
+  if (deepSummary && deepSummary.sections) {
+    deepSummary.sections.forEach((section) => {
+      html += `<div class="story-section">`;
+      html += `<h2 class="story-section-heading">${esc(section.heading)}</h2>`;
+      html += `<div class="story-section-content">${renderMarkdown(section.content)}</div>`;
+
+      // Section sources
+      if (section.sources && section.sources.length > 0) {
+        html += `<div class="section-sources">`;
+        section.sources.forEach((src) => {
+          const domain = getDomain(src.url);
+          html += `<a href="${esc(src.url)}" target="_blank" rel="noopener" class="section-source-tag">`;
+          if (domain) html += `<img src="https://www.google.com/s2/favicons?domain=${esc(domain)}&sz=16" alt="" onerror="this.style.display='none'">`;
+          html += `${esc(domain || src.name)}</a>`;
+        });
+        html += `</div>`;
+      }
+
+      html += `</div>`;
+    });
+  } else if (data.summary) {
+    // Fallback: show the short summary if no deep summary
+    html += `<div class="story-section">`;
+    html += `<div class="story-section-content"><p>${esc(data.summary)}</p></div>`;
+    html += `</div>`;
+  }
+
+  storyContent.innerHTML = html;
+}
+
+function buildSkeleton(cluster) {
+  const primary = cluster.primaryArticle;
+  const timeAgo = formatTimeAgo(new Date(cluster.latestDate));
+
+  // Show real title + meta but skeleton for body
+  let html = `<div class="story-detail-header">`;
+  html += `<h1 class="story-detail-title">${esc(primary.title)}</h1>`;
+  html += `<div class="story-detail-meta">`;
+  html += `<span class="detail-time">Published ${timeAgo}</span>`;
+  html += `<span class="detail-dot"></span>`;
+  html += `<span class="detail-source-count">${cluster.sourceCount} source${cluster.sourceCount !== 1 ? 's' : ''}</span>`;
+  html += `</div>`;
+
+  // Source favicons
+  html += `<div class="story-detail-sources">`;
+  const uniqueSources = getUniqueSources(cluster.articles);
+  uniqueSources.forEach((a) => {
+    const domain = getDomain(a.url);
+    html += `<a href="${esc(a.url)}" target="_blank" rel="noopener" class="source-favicon">`;
+    if (domain) html += `<img src="https://www.google.com/s2/favicons?domain=${esc(domain)}&sz=16" alt="" onerror="this.style.display='none'">`;
+    html += `${esc(a.source)}</a>`;
+  });
+  html += `</div></div>`;
+
+  // Real image if available
+  if (cluster.image) {
+    html += `<div class="detail-hero-image">`;
+    html += `<img src="${esc(cluster.image)}" alt="" onerror="this.parentElement.style.display='none'">`;
+    html += `</div>`;
+  }
+
+  // Skeleton sections
+  html += `<div class="skeleton-wrap">`;
+  for (let i = 0; i < 3; i++) {
+    html += `
+      <div style="margin-bottom:28px">
+        <div class="skeleton-bar skeleton-heading"></div>
+        <div class="skeleton-bar skeleton-line"></div>
+        <div class="skeleton-bar skeleton-line"></div>
+        <div class="skeleton-bar skeleton-line short"></div>
+        <div class="skeleton-bar skeleton-line shorter"></div>
+      </div>
+    `;
+  }
+  html += `</div>`;
+
+  return html;
+}
+
+// ─── Discover More ──────────────────────────────────────────────
+
+function renderDiscoverMore(currentIndex) {
+  const others = allClusters
+    .map((c, i) => ({ cluster: c, index: i }))
+    .filter((item) => item.index !== currentIndex)
+    .slice(0, 4);
+
+  if (others.length === 0) {
+    discoverSection.style.display = 'none';
+    return;
+  }
+
+  discoverSection.style.display = 'block';
+
+  relatedStories.innerHTML = others
+    .map(({ cluster, index }) => {
+      const primary = cluster.primaryArticle;
+      const snippet = cluster.summary || primary.description || '';
+
+      const imgHtml = cluster.image
+        ? `<div class="related-card-image"><img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'"></div>`
+        : '';
+
+      return `
+        <div class="related-card" data-related-index="${index}">
+          ${imgHtml}
+          <div class="related-card-text">
+            <div class="related-card-title">${esc(primary.title)}</div>
+            <div class="related-card-snippet">${esc(snippet.slice(0, 120))}${snippet.length > 120 ? '...' : ''}</div>
+            <div class="related-card-sources">${cluster.sourceCount} source${cluster.sourceCount !== 1 ? 's' : ''}</div>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  // Attach click handlers
+  relatedStories.querySelectorAll('[data-related-index]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.relatedIndex);
+      openStory(idx);
+    });
+  });
+}
+
+// ─── Follow-up Questions ────────────────────────────────────────
+
+async function askFollowUp() {
+  const question = followupInput.value.trim();
+  if (!question || currentStoryIndex === null) return;
+
+  // Show loading
+  followupAnswer.style.display = 'block';
+  followupAnswer.innerHTML = `<div class="followup-loading"><div class="spinner"></div>Thinking...</div>`;
+
+  try {
+    const res = await fetch('/api/followup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        storyIndex: currentStoryIndex,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    followupAnswer.innerHTML = renderMarkdown(data.answer);
+  } catch (err) {
+    console.error('Follow-up failed:', err);
+    followupAnswer.innerHTML = '<p>Failed to get an answer. Please try again.</p>';
+  }
+}
+
+// ─── View Navigation ────────────────────────────────────────────
+
+function showFeed(fromPopstate) {
+  feedView.style.display = 'block';
+  categoryNav.style.display = 'block';
+  storyView.style.display = 'none';
+  currentStoryIndex = null;
+
+  if (!fromPopstate) {
+    history.pushState({ view: 'feed' }, '', '#');
+  }
 }
 
 function showLoading() {
@@ -171,4 +501,67 @@ function showEmpty() {
   loadingEl.style.display = 'none';
   errorEl.style.display = 'none';
   emptyEl.style.display = 'block';
+}
+
+// ─── Helpers ────────────────────────────────────────────────────
+
+function buildSourceFavicons(articles, maxCount) {
+  const unique = getUniqueSources(articles);
+  return unique
+    .slice(0, maxCount)
+    .map((a) => {
+      const domain = getDomain(a.url);
+      let html = `<span class="source-favicon">`;
+      if (domain) html += `<img src="https://www.google.com/s2/favicons?domain=${esc(domain)}&sz=16" alt="" onerror="this.style.display='none'">`;
+      html += `${esc(a.source)}</span>`;
+      return html;
+    })
+    .join('');
+}
+
+function getUniqueSources(articles) {
+  const seen = new Set();
+  return articles.filter((a) => {
+    if (seen.has(a.source)) return false;
+    seen.add(a.source);
+    return true;
+  });
+}
+
+function getDomain(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  // Convert **bold** to <strong>, then handle paragraphs
+  let html = esc(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n\n+/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+  return `<p>${html}</p>`;
+}
+
+function formatTimeAgo(date) {
+  const now = new Date();
+  const diffMs = now - date;
+  const minutes = Math.floor(diffMs / 60000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (minutes > 0) return `${minutes}m ago`;
+  return 'just now';
+}
+
+function esc(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
