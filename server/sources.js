@@ -8,13 +8,13 @@ const sources = [
   },
   {
     name: 'ReliefWeb',
-    url: 'https://reliefweb.int/updates/rss.xml?search=south+sudan',
+    url: 'https://reliefweb.int/updates/rss.xml?advanced-search=%28PC8657%29',
     category: 'humanitarian',
     reliability: 'high',
   },
   {
     name: 'Sudan Tribune',
-    url: 'https://sudantribune.com/feed/',
+    url: 'https://news.google.com/rss/search?q=%22south+sudan%22+site:sudantribune.com&hl=en-US&gl=US&ceid=US:en',
     category: 'regional',
     reliability: 'medium',
   },
@@ -26,7 +26,7 @@ const sources = [
   },
   {
     name: 'VOA Africa',
-    url: 'https://www.voanews.com/api/zq_oremqvi',
+    url: 'https://news.google.com/rss/search?q=%22south+sudan%22+site:voanews.com&hl=en-US&gl=US&ceid=US:en',
     category: 'international',
     reliability: 'high',
   },
@@ -37,7 +37,7 @@ const sources = [
     reliability: 'high',
   },
   {
-    name: 'Reuters Africa',
+    name: 'Reuters',
     url: 'https://news.google.com/rss/search?q=%22south+sudan%22+site:reuters.com&hl=en-US&gl=US&ceid=US:en',
     category: 'international',
     reliability: 'high',
@@ -50,7 +50,7 @@ const sources = [
   },
   {
     name: 'The East African',
-    url: 'https://www.theeastafrican.co.ke/tea/rss',
+    url: 'https://news.google.com/rss/search?q=%22south+sudan%22+site:theeastafrican.co.ke&hl=en-US&gl=US&ceid=US:en',
     category: 'regional',
     reliability: 'medium',
   },
