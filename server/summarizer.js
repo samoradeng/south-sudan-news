@@ -1,5 +1,5 @@
 // AI summarization using Groq (free tier — Llama 3)
-// Falls back gracefully to description extraction if no API key
+// Two modes: quick summaries for feed cards, deep structured articles for detail view
 
 const Groq = require('groq-sdk');
 
@@ -11,16 +11,17 @@ function initGroq(apiKey) {
   }
 }
 
+// ─── Quick summary (for feed cards) ────────────────────────────
+
 async function summarizeCluster(cluster) {
-  // If no AI available, use extractive summary
   if (!groqClient) {
     return extractiveSummary(cluster);
   }
 
   try {
     const articlesText = cluster.articles
-      .slice(0, 5) // Limit to 5 articles to stay within token limits
-      .map((a, i) => `[${a.source}] ${a.title}\n${a.description}`)
+      .slice(0, 5)
+      .map((a) => `[${a.source}] ${a.title}\n${a.description}`)
       .join('\n\n');
 
     const response = await groqClient.chat.completions.create({
@@ -48,7 +49,6 @@ async function summarizeCluster(cluster) {
 }
 
 function extractiveSummary(cluster) {
-  // Fallback: use the longest description from the highest-reliability source
   const best = cluster.articles
     .filter((a) => a.description && a.description.length > 50)
     .sort((a, b) => b.description.length - a.description.length)[0];
@@ -57,7 +57,6 @@ function extractiveSummary(cluster) {
 }
 
 async function summarizeClusters(clusters) {
-  // Process in batches of 3 to respect rate limits
   const results = [];
   for (let i = 0; i < clusters.length; i += 3) {
     const batch = clusters.slice(i, i + 3);
@@ -72,4 +71,194 @@ async function summarizeClusters(clusters) {
   return results;
 }
 
-module.exports = { initGroq, summarizeClusters, summarizeCluster };
+// ─── Deep structured summary (for story detail view) ──────────
+
+async function deepSummarizeCluster(cluster) {
+  if (!groqClient) {
+    return fallbackDeepSummary(cluster);
+  }
+
+  try {
+    const articles = cluster.articles.slice(0, 6);
+    const articlesText = articles
+      .map(
+        (a, i) =>
+          `Article ${i + 1} [${a.source}]:\nTitle: ${a.title}\n${a.description}`
+      )
+      .join('\n\n---\n\n');
+
+    const response = await groqClient.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: `You are an expert news analyst writing for a Perplexity-style news platform. Given multiple articles about the same South Sudan story, write a comprehensive, structured analysis.
+
+Format your response EXACTLY like this — use ## for section headings:
+
+## [Descriptive Section Heading]
+[1-2 paragraphs synthesizing information. Use **bold** for key names, numbers, organizations, dates, and important facts. At the end of each paragraph, cite which article numbers provided the information using {1} or {1,3} format.]
+
+## [Second Section Heading]
+[More paragraphs with **bold** key facts and {source numbers}.]
+
+Rules:
+- Write 3-5 sections with descriptive, specific headings (NOT generic like "Background" or "Conclusion")
+- Use **bold** liberally for key names, numbers, organizations, places, and important facts
+- Cite article numbers at the end of each paragraph using {N} or {N,M} format
+- Each section should be 1-2 substantial paragraphs
+- Synthesize across sources — don't just repeat each article
+- Be factual and journalistic — no editorializing
+- Include specific details: names, dates, numbers, quotes when available`,
+        },
+        {
+          role: 'user',
+          content: `Analyze and synthesize these ${articles.length} articles about a South Sudan story:\n\n${articlesText}`,
+        },
+      ],
+      max_tokens: 2000,
+      temperature: 0.3,
+    });
+
+    const rawText = response.choices[0]?.message?.content?.trim();
+    if (!rawText) return fallbackDeepSummary(cluster);
+
+    return parseDeepSummary(rawText, articles);
+  } catch (err) {
+    console.warn(`Deep summarization failed: ${err.message}`);
+    return fallbackDeepSummary(cluster);
+  }
+}
+
+function parseDeepSummary(text, articles) {
+  const sections = [];
+  const parts = text.split(/^## /m).filter(Boolean);
+
+  for (const part of parts) {
+    const lines = part.trim().split('\n');
+    const heading = lines[0].trim().replace(/^\*\*|\*\*$/g, '');
+    const content = lines.slice(1).join('\n').trim();
+
+    // Extract source citations {1,2,3}
+    const citedIndices = new Set();
+    const citationRegex = /\{(\d+(?:,\s*\d+)*)\}/g;
+    let match;
+    while ((match = citationRegex.exec(content))) {
+      match[1].split(',').forEach((n) => {
+        const idx = parseInt(n.trim()) - 1;
+        if (idx >= 0 && idx < articles.length) citedIndices.add(idx);
+      });
+    }
+
+    // Clean content (remove citation markers but keep everything else)
+    const cleanContent = content.replace(/\s*\{(\d+(?:,\s*\d+)*)\}\s*/g, ' ').trim();
+
+    const sectionSources =
+      citedIndices.size > 0
+        ? [...citedIndices].map((i) => ({
+            name: articles[i].source,
+            url: articles[i].url,
+          }))
+        : articles.slice(0, 2).map((a) => ({ name: a.source, url: a.url }));
+
+    if (heading && cleanContent) {
+      sections.push({
+        heading,
+        content: cleanContent,
+        sources: sectionSources,
+      });
+    }
+  }
+
+  // Fallback if parsing produced nothing
+  if (sections.length === 0) {
+    sections.push({
+      heading: 'Summary',
+      content: text.replace(/\{(\d+(?:,\s*\d+)*)\}/g, '').replace(/^## .+$/gm, '').trim(),
+      sources: articles.map((a) => ({ name: a.source, url: a.url })),
+    });
+  }
+
+  return {
+    sections,
+    allSources: articles.map((a) => ({
+      name: a.source,
+      url: a.url,
+      image: a.image,
+    })),
+  };
+}
+
+function fallbackDeepSummary(cluster) {
+  // Build sections from individual article descriptions
+  const sections = cluster.articles
+    .filter((a) => a.description && a.description.length > 60)
+    .slice(0, 4)
+    .map((a) => ({
+      heading: a.title,
+      content: a.description,
+      sources: [{ name: a.source, url: a.url }],
+    }));
+
+  if (sections.length === 0) {
+    sections.push({
+      heading: cluster.primaryArticle.title,
+      content: cluster.primaryArticle.description || cluster.primaryArticle.title,
+      sources: [{ name: cluster.primaryArticle.source, url: cluster.primaryArticle.url }],
+    });
+  }
+
+  return {
+    sections,
+    allSources: cluster.articles.map((a) => ({
+      name: a.source,
+      url: a.url,
+      image: a.image,
+    })),
+  };
+}
+
+// ─── Follow-up question answering ─────────────────────────────
+
+async function answerFollowUp(cluster, question) {
+  if (!groqClient) {
+    return 'AI follow-up questions require a Groq API key. Add GROQ_API_KEY to your .env file.';
+  }
+
+  try {
+    const articles = cluster.articles.slice(0, 5);
+    const context = articles
+      .map((a) => `[${a.source}] ${a.title}\n${a.description}`)
+      .join('\n\n');
+
+    const response = await groqClient.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a helpful news analyst specializing in South Sudan. Answer questions based on the provided articles. Be concise and factual. Use **bold** for key facts. If the articles don\'t contain enough information, say so honestly.',
+        },
+        {
+          role: 'user',
+          content: `Based on these articles:\n\n${context}\n\nQuestion: ${question}`,
+        },
+      ],
+      max_tokens: 500,
+      temperature: 0.3,
+    });
+
+    return response.choices[0]?.message?.content?.trim() || 'Unable to generate an answer.';
+  } catch (err) {
+    console.warn(`Follow-up failed: ${err.message}`);
+    return 'Failed to generate answer. Please try again.';
+  }
+}
+
+module.exports = {
+  initGroq,
+  summarizeClusters,
+  summarizeCluster,
+  deepSummarizeCluster,
+  answerFollowUp,
+};
