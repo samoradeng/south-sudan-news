@@ -7,6 +7,13 @@ const parser = new Parser({
     'User-Agent': 'SouthSudanNews/1.0',
     Accept: 'application/rss+xml, application/xml, text/xml',
   },
+  customFields: {
+    item: [
+      ['media:content', 'mediaContent', { keepArray: false }],
+      ['media:thumbnail', 'mediaThumbnail', { keepArray: false }],
+      ['media:group', 'mediaGroup', { keepArray: false }],
+    ],
+  },
 });
 
 // Keywords to filter articles that are actually about South Sudan
@@ -41,13 +48,33 @@ function isAboutSouthSudan(article) {
   return SOUTH_SUDAN_KEYWORDS.some((kw) => text.includes(kw));
 }
 
+function extractImage(item) {
+  // Try multiple RSS image fields
+  if (item.enclosure?.url && item.enclosure.type?.startsWith('image')) return item.enclosure.url;
+  if (item.enclosure?.url) return item.enclosure.url;
+  if (item.mediaContent?.$?.url) return item.mediaContent.$.url;
+  if (item.mediaThumbnail?.$?.url) return item.mediaThumbnail.$.url;
+  if (item.mediaGroup?.['media:content']?.$?.url) return item.mediaGroup['media:content'].$.url;
+
+  // Try to extract image from HTML content
+  const html = item.content || item['content:encoded'] || '';
+  const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/);
+  if (imgMatch) return imgMatch[1];
+
+  return null;
+}
+
 function normalizeArticle(item, sourceName, sourceCategory, sourceReliability) {
+  // Clean description: strip HTML tags
+  let desc = (item.contentSnippet || item.summary || item.content || '').slice(0, 500).trim();
+  desc = desc.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+
   return {
     id: item.guid || item.link || `${sourceName}-${item.title}`,
     title: (item.title || '').trim(),
-    description: (item.contentSnippet || item.summary || item.content || '').slice(0, 500).trim(),
+    description: desc,
     url: item.link || '',
-    image: item.enclosure?.url || item['media:content']?.$.url || null,
+    image: extractImage(item),
     publishedAt: item.isoDate || item.pubDate || new Date().toISOString(),
     source: sourceName,
     sourceCategory,

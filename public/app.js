@@ -98,9 +98,12 @@ function createStoryCard(cluster, featured) {
 
   const extraCount = cluster.sourceCount > 4 ? `<span class="story-source-count">+${cluster.sourceCount - 4} more</span>` : '';
 
-  // Summary with AI badge if it looks AI-generated (longer than typical description)
   const summaryHtml = cluster.summary
     ? `<p class="story-summary">${escapeHtml(cluster.summary)}</p>`
+    : '';
+
+  const imageHtml = cluster.image
+    ? `<div class="story-image"><img src="${escapeHtml(cluster.image)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'"></div>`
     : '';
 
   return `
@@ -109,10 +112,15 @@ function createStoryCard(cluster, featured) {
         <span class="story-category ${category}">${category}</span>
         <span class="story-time">${timeAgo}</span>
       </div>
-      <h2 class="story-title">
-        <a href="${escapeHtml(primary.url)}" target="_blank" rel="noopener">${escapeHtml(primary.title)}</a>
-      </h2>
-      ${summaryHtml}
+      <div class="story-body">
+        <div class="story-text">
+          <h2 class="story-title">
+            <a href="${escapeHtml(primary.url)}" target="_blank" rel="noopener">${escapeHtml(primary.title)}</a>
+          </h2>
+          ${summaryHtml}
+        </div>
+        ${imageHtml}
+      </div>
       <div class="story-footer">
         <div class="story-sources">
           ${sourceTags}
