@@ -1,13 +1,41 @@
 // AI summarization using Groq (free tier — Llama 3)
 // Two modes: quick summaries for feed cards, deep structured articles for detail view
+// Rate limit: Groq free tier = 30 RPM. We pace requests with delays + retry on 429.
 
 const Groq = require('groq-sdk');
 
 let groqClient = null;
 
+// Groq free tier: 30 requests/minute. We'll pace to ~20 RPM to be safe.
+const REQUEST_DELAY_MS = 3000; // 3s between requests = 20 RPM
+const MAX_AI_SUMMARIES = 15; // Only AI-summarize top 15 clusters, rest get extractive
+const MAX_RETRIES = 3;
+
 function initGroq(apiKey) {
   if (apiKey) {
     groqClient = new Groq({ apiKey });
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Retry wrapper for Groq API calls with exponential backoff on 429
+async function callGroqWithRetry(params) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await groqClient.chat.completions.create(params);
+    } catch (err) {
+      const is429 = err.message?.includes('429') || err.status === 429;
+      if (is429 && attempt < MAX_RETRIES) {
+        const waitMs = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+        console.log(`  Rate limited, waiting ${waitMs / 1000}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
+        await sleep(waitMs);
+        continue;
+      }
+      throw err;
+    }
   }
 }
 
@@ -24,7 +52,7 @@ async function summarizeCluster(cluster) {
       .map((a) => `[${a.source}] ${a.title}\n${a.description}`)
       .join('\n\n');
 
-    const response = await groqClient.chat.completions.create({
+    const response = await callGroqWithRetry({
       model: 'llama-3.3-70b-versatile',
       messages: [
         {
@@ -58,16 +86,29 @@ function extractiveSummary(cluster) {
 
 async function summarizeClusters(clusters) {
   const results = [];
-  for (let i = 0; i < clusters.length; i += 3) {
-    const batch = clusters.slice(i, i + 3);
-    const summaries = await Promise.all(
-      batch.map(async (cluster) => {
-        const summary = await summarizeCluster(cluster);
-        return { ...cluster, summary };
-      })
-    );
-    results.push(...summaries);
+
+  // AI-summarize top clusters one at a time with delays to respect rate limit
+  const aiCount = Math.min(clusters.length, MAX_AI_SUMMARIES);
+  console.log(`AI-summarizing top ${aiCount} of ${clusters.length} clusters (pacing: ${REQUEST_DELAY_MS / 1000}s between requests)...`);
+
+  for (let i = 0; i < clusters.length; i++) {
+    if (i < aiCount && groqClient) {
+      // AI summary with rate-limit pacing
+      const summary = await summarizeCluster(clusters[i]);
+      results.push({ ...clusters[i], summary });
+
+      // Delay before next request (skip after last one)
+      if (i < aiCount - 1) {
+        await sleep(REQUEST_DELAY_MS);
+      }
+    } else {
+      // Extractive summary for remaining clusters (instant, no API call)
+      const summary = extractiveSummary(clusters[i]);
+      results.push({ ...clusters[i], summary });
+    }
   }
+
+  console.log(`Summarization complete: ${aiCount} AI + ${clusters.length - aiCount} extractive`);
   return results;
 }
 
@@ -87,7 +128,7 @@ async function deepSummarizeCluster(cluster) {
       )
       .join('\n\n---\n\n');
 
-    const response = await groqClient.chat.completions.create({
+    const response = await callGroqWithRetry({
       model: 'llama-3.3-70b-versatile',
       messages: [
         {
@@ -231,7 +272,7 @@ async function answerFollowUp(cluster, question) {
       .map((a) => `[${a.source}] ${a.title}\n${a.description}`)
       .join('\n\n');
 
-    const response = await groqClient.chat.completions.create({
+    const response = await callGroqWithRetry({
       model: 'llama-3.3-70b-versatile',
       messages: [
         {
