@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>South Sudan News</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <header>
+    <div class="header-inner">
+      <div class="header-left">
+        <img src="images/SSN_logo.svg" alt="SSN" class="logo" onclick="window.scrollTo({top:0,behavior:'smooth'})">
+        <h1>South Sudan News</h1>
+      </div>
+      <div class="header-right">
+        <div class="source-count" id="source-count"></div>
+        <button class="refresh-btn" id="refresh-btn" title="Refresh">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="category-nav" id="category-nav">
+    <button class="category-btn active" data-category="all">All</button>
+    <button class="category-btn" data-category="local">Local</button>
+    <button class="category-btn" data-category="regional">Regional</button>
+    <button class="category-btn" data-category="international">International</button>
+    <button class="category-btn" data-category="humanitarian">Humanitarian</button>
+  </nav>
+
+  <main>
+    <div id="loading" class="loading-state">
+      <div class="spinner"></div>
+      <p>Gathering news from multiple sources...</p>
+    </div>
+
+    <div id="error" class="error-state" style="display:none">
+      <p>Failed to load news. Please try again.</p>
+      <button onclick="loadNews()">Retry</button>
+    </div>
+
+    <div id="empty" class="empty-state" style="display:none">
+      <p>No South Sudan news found right now. Check back later.</p>
+    </div>
+
+    <div id="stories" class="stories-grid"></div>
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      <p>Aggregated from <span id="footer-sources"></span> sources. Updated <span id="last-updated"></span>.</p>
+      <p class="footer-note">South Sudan News gathers articles from free, publicly available RSS feeds and uses AI to summarize related stories.</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
