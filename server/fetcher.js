@@ -1,12 +1,10 @@
 const Parser = require('rss-parser');
 const sources = require('./sources');
 
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 const parser = new Parser({
-  timeout: 10000,
-  headers: {
-    'User-Agent': 'SouthSudanNews/1.0',
-    Accept: 'application/rss+xml, application/xml, text/xml',
-  },
   customFields: {
     item: [
       ['media:content', 'mediaContent', { keepArray: false }],
@@ -15,6 +13,30 @@ const parser = new Parser({
     ],
   },
 });
+
+// Fetch XML with browser UA, strip BOM, then parse with rss-parser
+async function fetchFeed(url) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  const res = await fetch(url, {
+    signal: controller.signal,
+    headers: {
+      'User-Agent': BROWSER_UA,
+      Accept: 'application/rss+xml, application/xml, text/xml, */*',
+    },
+    redirect: 'follow',
+  });
+  clearTimeout(timeoutId);
+
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+  let xml = await res.text();
+  // Strip BOM and any leading whitespace/garbage before XML declaration
+  xml = xml.replace(/^[\s\S]*?(<\?xml|<rss|<feed)/, '$1');
+
+  return parser.parseString(xml);
+}
 
 // Strong keywords: if found in title, article is definitely about South Sudan
 const STRONG_KEYWORDS = [
@@ -107,8 +129,7 @@ async function scrapeOgImage(articleUrl) {
     const res = await fetch(articleUrl, {
       signal: controller.signal,
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': BROWSER_UA,
         Accept: 'text/html',
       },
       redirect: 'follow',
@@ -192,7 +213,7 @@ function normalizeArticle(item, sourceName, sourceCategory, sourceReliability) {
 
 async function fetchFromSource(source) {
   try {
-    const feed = await parser.parseURL(source.url);
+    const feed = await fetchFeed(source.url);
     const articles = (feed.items || [])
       .map((item) => normalizeArticle(item, source.name, source.category, source.reliability))
       .filter(isAboutSouthSudan);
