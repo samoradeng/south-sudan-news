@@ -15,7 +15,7 @@
 //
 // Requires: GROQ_API_KEY in .env (for extraction, unless --dry-run)
 
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const fs = require('fs');
 const path = require('path');

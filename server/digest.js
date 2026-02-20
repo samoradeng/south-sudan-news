@@ -59,26 +59,22 @@ function safeJSON(s) {
 }
 
 // ─── Rationale cleanup ──────────────────────────────────────────
-// Old DB entries have verbose AI-justification prose.
-// Strip sentences that start with scoring methodology patterns.
+// Old DB entries (prompt v2) have verbose AI-justification prose like
+// "The severity is rated as critical due to..."
+// These add no signal — the summary already states the fact.
+// Suppress old-style rationale entirely; only show v3+ one-liners.
 
 function cleanRationale(rationale) {
   if (!rationale) return null;
-  // If it starts with "The severity is..." / "The verification status is..." — it's old-style
-  if (/^the (severity|verification)/i.test(rationale.trim())) {
-    // Try to extract the core fact: look for a clause after "due to"
-    const dueToMatch = rationale.match(/due to (.+?)(?:\.|$)/i);
-    if (dueToMatch) {
-      let fact = dueToMatch[1].trim();
-      // Capitalize first letter, add period
-      fact = fact.charAt(0).toUpperCase() + fact.slice(1);
-      if (!fact.endsWith('.')) fact += '.';
-      return fact;
-    }
-    // Fallback: return null (summary speaks for itself)
-    return null;
-  }
-  return rationale;
+  const trimmed = rationale.trim();
+  // Old-style: starts with scoring methodology language — suppress
+  if (/^the (severity|verification|confidence)/i.test(trimmed)) return null;
+  // Old-style: starts with "This is rated..." or "Rated as..."
+  if (/^(this is rated|rated as|severity \d)/i.test(trimmed)) return null;
+  // Old-style: contains "which is a" value judgment filler
+  if (/which is a (grave|significant|major|serious)/i.test(trimmed)) return null;
+  // Passes filters — it's a clean v3+ rationale or genuinely useful
+  return trimmed;
 }
 
 // ─── Region containment for dedup ───────────────────────────────
@@ -126,6 +122,67 @@ function regionsOverlap(regionsA, regionsB) {
     }
   }
   return false;
+}
+
+// ─── Region display: collapse flat list into hierarchy ──────────
+// ["El Fasher", "North Darfur", "Darfur"] → "North Darfur (El Fasher)"
+// Removes redundant parent regions when children are present.
+
+function collapseRegions(regions) {
+  if (regions.length <= 1) return regions;
+
+  const normed = regions.map(r => ({ orig: r, key: r.toLowerCase().trim() }));
+
+  // Mark regions that are a parent of another region in the list
+  const parentKeys = new Set();
+  // Mark regions that are a child (have a parent in the list)
+  const childKeys = new Set();
+
+  for (const r of normed) {
+    const parents = REGION_CONTAINMENT[r.key] || [];
+    for (const p of parents) {
+      if (normed.some(n => n.key === p)) {
+        parentKeys.add(p);
+        childKeys.add(r.key);
+      }
+    }
+  }
+
+  // Build display: for each "mid-level" region (state level, not a pure child),
+  // append its children in parentheses. Skip top-level parents that are redundant.
+  const result = [];
+  const used = new Set();
+
+  for (const r of normed) {
+    if (used.has(r.key)) continue;
+
+    // Skip if this region is purely a parent of something already shown
+    if (parentKeys.has(r.key) && !childKeys.has(r.key)) {
+      // It's a top-level parent — skip if a child exists
+      // E.g., "Darfur" when "North Darfur" is present
+      used.add(r.key);
+      continue;
+    }
+
+    // Find children of this region in the list
+    const children = normed.filter(n =>
+      n.key !== r.key &&
+      !used.has(n.key) &&
+      (REGION_CONTAINMENT[n.key] || []).includes(r.key)
+    );
+
+    if (children.length > 0) {
+      const childNames = children.map(c => c.orig);
+      result.push(`${r.orig} (${childNames.join(', ')})`);
+      used.add(r.key);
+      children.forEach(c => used.add(c.key));
+    } else {
+      result.push(r.orig);
+      used.add(r.key);
+    }
+  }
+
+  return result;
 }
 
 // ─── Event deduplication for digest ─────────────────────────────
@@ -326,6 +383,7 @@ function generateDigest() {
       eventsThisWeek: twEvents.length,
       eventsLastWeek: lwEvents.length,
       highSevCount: highSeverity.length,
+      highSevRawCount: rawHighSev.length,
       countriesThisWeek: [...new Set(twEvents.map((e) => e.country))],
       baselineWeak,
     },
@@ -406,7 +464,7 @@ a { color: #3498db; text-decoration: none; }
     html += `<div class="ev-meta">`;
     html += `<span class="badge badge-sev">${SEV_LABELS[e.severity] || 'SEV ' + e.severity}</span>`;
     html += `<span class="badge badge-type">${e.eventType}${e.eventSubtype ? '/' + e.eventSubtype : ''}</span>`;
-    html += `${e.country}${e.regions.length ? ' / ' + e.regions.join(', ') : ''} `;
+    html += `${e.country}${e.regions.length ? ' / ' + collapseRegions(e.regions).join(', ') : ''} `;
     html += `| ${e.verificationStatus}`;
     if (e.primaryUrl) html += ` | <a href="${escHTML(e.primaryUrl)}">source</a>`;
     html += '</div>';
@@ -448,7 +506,10 @@ a { color: #3498db; text-decoration: none; }
 
   // Footer
   const sourceCount = 16;
-  html += `<div class="footer">Generated from structured event extraction across ${sourceCount} monitored sources covering ${d.dataPoints.countriesThisWeek.join(', ') || 'Horn of Africa'}. ${d.dataPoints.eventsThisWeek} events processed, ${d.dataPoints.highSevCount} high-severity. Source links included above.</div>`;
+  const sevNote = d.dataPoints.highSevRawCount !== d.dataPoints.highSevCount
+    ? `${d.dataPoints.highSevRawCount} severity 4-5 events consolidated into ${d.dataPoints.highSevCount} items`
+    : `${d.dataPoints.highSevCount} severity 4-5 events`;
+  html += `<div class="footer">Generated from structured event extraction across ${sourceCount} monitored sources covering ${d.dataPoints.countriesThisWeek.join(', ') || 'Horn of Africa'}. ${d.dataPoints.eventsThisWeek} events processed, ${sevNote}. Source links included above.</div>`;
 
   html += '</body></html>';
   return html;
@@ -486,7 +547,7 @@ function renderDigestText(digest) {
   }
   for (const e of d.highSeverity) {
     text += `  [${SEV_LABELS[e.severity] || 'SEV ' + e.severity}] ${e.summary}\n`;
-    text += `    ${e.country}${e.regions.length ? ' / ' + e.regions.join(', ') : ''} | ${e.verificationStatus}`;
+    text += `    ${e.country}${e.regions.length ? ' / ' + collapseRegions(e.regions).join(', ') : ''} | ${e.verificationStatus}`;
     if (e.sourceCount > 1) text += ` | ${e.sourceCount} articles`;
     text += '\n';
     if (e.rationale) text += `    ${e.rationale}\n`;

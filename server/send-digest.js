@@ -14,7 +14,7 @@
 //   DIGEST_FROM_NAME=Horn Monitor       (optional, defaults to "Horn Monitor")
 
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const { initDB } = require('./db');
 const { generateDigest, renderDigestHTML, renderDigestText } = require('./digest');
