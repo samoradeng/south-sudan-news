@@ -16,7 +16,7 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
-const { initDB } = require('./db');
+const { initDB, isUnsubscribed, generateUnsubToken } = require('./db');
 const { generateDigest, renderDigestHTML, renderDigestText } = require('./digest');
 
 // ─── Config ──────────────────────────────────────────────────
@@ -26,6 +26,7 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const FROM_NAME = process.env.DIGEST_FROM_NAME || 'Horn Monitor';
+const BASE_URL = (process.env.BASE_URL || '').replace(/\/$/, ''); // e.g. https://horn-monitor.up.railway.app
 const RECIPIENTS = (process.env.DIGEST_RECIPIENTS || '')
   .split(',')
   .map(e => e.trim())
@@ -47,9 +48,9 @@ async function main() {
   const text = renderDigestText(digest);
   const weekNum = digest.weekNumber;
 
-  // Preview mode: just output the HTML
+  // Preview mode: just output the HTML (with dummy unsubscribe link)
   if (isPreview) {
-    console.log(html);
+    console.log(html.replace('{{UNSUBSCRIBE_URL}}', '#unsubscribe-preview'));
     return;
   }
 
@@ -77,15 +78,26 @@ async function main() {
     process.exit(1);
   }
 
-  // Determine recipients
+  // Determine recipients (filter out unsubscribed)
   let to;
   if (isTest) {
     to = [SMTP_USER];
     console.log(`Test mode: sending only to ${SMTP_USER}`);
   } else {
-    to = RECIPIENTS.length > 0 ? RECIPIENTS : [SMTP_USER];
+    const raw = RECIPIENTS.length > 0 ? RECIPIENTS : [SMTP_USER];
     if (RECIPIENTS.length === 0) {
       console.log('No DIGEST_RECIPIENTS set — sending to SMTP_USER as fallback');
+    }
+    to = raw.filter(email => {
+      if (isUnsubscribed(email)) {
+        console.log(`  Skipping ${email} (unsubscribed)`);
+        return false;
+      }
+      return true;
+    });
+    if (to.length === 0) {
+      console.log('All recipients have unsubscribed. Nothing to send.');
+      return;
     }
   }
 
@@ -122,15 +134,22 @@ async function main() {
   }
 
   // Send to each recipient individually (BCC-style, no one sees the list)
+  // Each email gets a personalized unsubscribe link
   let sent = 0;
   for (const recipient of to) {
     try {
+      const token = generateUnsubToken(recipient);
+      const unsubUrl = BASE_URL
+        ? `${BASE_URL}/unsubscribe?email=${encodeURIComponent(recipient)}&token=${token}`
+        : '#';
+      const recipientHtml = html.replace('{{UNSUBSCRIBE_URL}}', unsubUrl);
+
       await transporter.sendMail({
         from: `"${FROM_NAME}" <${SMTP_USER}>`,
         to: recipient,
         subject,
         text,
-        html,
+        html: recipientHtml,
       });
       console.log(`  Sent to ${recipient}`);
       sent++;

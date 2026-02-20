@@ -1,10 +1,11 @@
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 const NodeCache = require('node-cache');
 const { fetchAllSources } = require('./fetcher');
 const { clusterArticles } = require('./cluster');
 const { initGroq, extractiveSummary, deepSummarizeCluster, answerFollowUp } = require('./summarizer');
-const { initDB, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion, getDataQuality } = require('./db');
+const { initDB, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion, getDataQuality, generateUnsubToken, isUnsubscribed, addUnsubscribe } = require('./db');
 const { initExtractor, extractAllEvents } = require('./extractor');
 const { generateDigest, renderDigestHTML, renderDigestText } = require('./digest');
 
@@ -31,14 +32,79 @@ if (process.env.GROQ_API_KEY) {
   console.log('Get a free key at https://console.groq.com to enable AI summaries');
 }
 
-// Parse JSON bodies
+// ─── Middleware ──────────────────────────────────────────────────
+
 app.use(express.json());
 
 // Serve static frontend
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// API: Get clustered, summarized news (feed view)
-app.get('/api/news', async (req, res) => {
+// ─── Basic auth for /admin ──────────────────────────────────────
+// Set ADMIN_TOKEN in .env. If not set, admin is open (dev mode).
+
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_TOKEN) return next(); // No token configured = dev mode
+
+  // Check Authorization: Bearer <token>
+  const auth = req.headers.authorization;
+  if (auth && auth === `Bearer ${ADMIN_TOKEN}`) return next();
+
+  // Check ?token= query param (for browser access to /admin)
+  if (req.query.token === ADMIN_TOKEN) return next();
+
+  // Check Basic Auth
+  if (auth && auth.startsWith('Basic ')) {
+    const decoded = Buffer.from(auth.slice(6), 'base64').toString();
+    const [, password] = decoded.split(':');
+    if (password === ADMIN_TOKEN) return next();
+  }
+
+  res.set('WWW-Authenticate', 'Basic realm="Horn Monitor Admin"');
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+// ─── Rate limiting ──────────────────────────────────────────────
+// Simple in-memory rate limiter. No dependencies.
+
+const rateLimitStore = {};
+
+function rateLimit(windowMs, maxRequests) {
+  return (req, res, next) => {
+    const key = req.ip || req.connection.remoteAddress || 'unknown';
+    const now = Date.now();
+    if (!rateLimitStore[key]) rateLimitStore[key] = [];
+
+    // Drop expired entries
+    rateLimitStore[key] = rateLimitStore[key].filter(t => t > now - windowMs);
+
+    if (rateLimitStore[key].length >= maxRequests) {
+      return res.status(429).json({ error: 'Too many requests. Please wait.' });
+    }
+
+    rateLimitStore[key].push(now);
+    next();
+  };
+}
+
+// Clean up rate limit store every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 600000;
+  for (const key of Object.keys(rateLimitStore)) {
+    rateLimitStore[key] = rateLimitStore[key].filter(t => t > cutoff);
+    if (rateLimitStore[key].length === 0) delete rateLimitStore[key];
+  }
+}, 300000);
+
+// Apply rate limits
+const apiLimiter = rateLimit(60000, 30);     // 30 req/min for general API
+const aiLimiter = rateLimit(60000, 5);       // 5 req/min for AI-powered endpoints
+const sendLimiter = rateLimit(3600000, 3);   // 3 sends/hour for digest
+
+// ─── Public API ─────────────────────────────────────────────────
+
+app.get('/api/news', apiLimiter, async (req, res) => {
   try {
     const cached = cache.get('clusters');
     if (cached) {
@@ -56,8 +122,6 @@ app.get('/api/news', async (req, res) => {
     const clusters = clusterArticles(articles);
     console.log(`Grouped into ${clusters.length} story clusters`);
 
-    // Use extractive summaries for instant feed loading (no AI calls).
-    // AI summaries are generated on-demand when user clicks into a story.
     const summarized = clusters.map((c) => ({
       ...c,
       summary: extractiveSummary(c),
@@ -73,8 +137,7 @@ app.get('/api/news', async (req, res) => {
     cache.set('clusters', response, CLUSTERS_TTL);
     res.json(response);
 
-    // Background: extract structured event data for all clusters
-    // This runs AFTER the response is sent — doesn't block the user
+    // Background: extract structured event data
     extractAllEvents(summarized).catch((err) => {
       console.error('Background event extraction error:', err.message);
     });
@@ -84,8 +147,7 @@ app.get('/api/news', async (req, res) => {
   }
 });
 
-// API: Deep summary for story detail view
-app.get('/api/story/:index', async (req, res) => {
+app.get('/api/story/:index', aiLimiter, async (req, res) => {
   try {
     const index = parseInt(req.params.index);
     const cached = cache.get('clusters');
@@ -94,7 +156,6 @@ app.get('/api/story/:index', async (req, res) => {
       return res.status(404).json({ error: 'Story not found' });
     }
 
-    // Check deep summary cache
     const deepKey = `deep-${index}`;
     const cachedDeep = cache.get(deepKey);
     if (cachedDeep) {
@@ -119,8 +180,7 @@ app.get('/api/story/:index', async (req, res) => {
   }
 });
 
-// API: Follow-up question
-app.post('/api/followup', async (req, res) => {
+app.post('/api/followup', aiLimiter, async (req, res) => {
   try {
     const { question, storyIndex } = req.body;
 
@@ -143,72 +203,88 @@ app.post('/api/followup', async (req, res) => {
   }
 });
 
-// API: Force refresh (bypass cache)
-app.post('/api/news/refresh', async (req, res) => {
+app.post('/api/news/refresh', apiLimiter, async (req, res) => {
   cache.del('clusters');
-  // Also clear all deep summary caches
   const keys = cache.keys();
   keys.filter((k) => k.startsWith('deep-')).forEach((k) => cache.del(k));
   res.json({ message: 'Cache cleared. Next request will fetch fresh data.' });
 });
 
-// API: Health check + event stats
+// Health check (public — no auth, no rate limit)
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
+    uptime: Math.round(process.uptime()),
     aiEnabled: !!process.env.GROQ_API_KEY,
-    cacheStats: cache.getStats(),
-    eventStats: getEventStats(),
+    emailEnabled: !!(process.env.SMTP_HOST && process.env.SMTP_USER),
+    adminProtected: !!ADMIN_TOKEN,
   });
 });
 
-// ─── Admin API endpoints ────────────────────────────────────────
+// ─── Unsubscribe endpoint (public) ─────────────────────────────
 
-app.get('/api/admin/events', (req, res) => {
+app.get('/unsubscribe', (req, res) => {
+  const { email, token } = req.query;
+  if (!email || !token) {
+    return res.status(400).type('html').send('<html><body><h2>Invalid unsubscribe link.</h2></body></html>');
+  }
+
+  const expected = generateUnsubToken(email);
+  if (token !== expected) {
+    return res.status(400).type('html').send('<html><body><h2>Invalid unsubscribe link.</h2></body></html>');
+  }
+
+  addUnsubscribe(email, token);
+  res.type('html').send(`<html><body style="font-family:sans-serif;max-width:480px;margin:80px auto;text-align:center">
+    <h2>Unsubscribed</h2>
+    <p style="color:#666">${email} has been removed from the Horn Risk Delta mailing list.</p>
+  </body></html>`);
+});
+
+// ─── Admin API (auth-protected) ─────────────────────────────────
+
+app.get('/api/admin/events', requireAdmin, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
   const offset = parseInt(req.query.offset) || 0;
   res.json({ events: getAllEvents(limit, offset), stats: getEventStats() });
 });
 
-app.get('/api/admin/alerts', (req, res) => {
+app.get('/api/admin/alerts', requireAdmin, (req, res) => {
   const minSeverity = parseInt(req.query.minSeverity) || 4;
   const days = parseInt(req.query.days) || 7;
   res.json({ alerts: getHighSeverityEvents(minSeverity, days) });
 });
 
-app.get('/api/admin/actors', (req, res) => {
+app.get('/api/admin/actors', requireAdmin, (req, res) => {
   res.json({ actors: getTopActors() });
 });
 
-app.get('/api/admin/regions', (req, res) => {
+app.get('/api/admin/regions', requireAdmin, (req, res) => {
   res.json({ regions: getEventsByRegion() });
 });
 
-app.get('/api/admin/quality', (req, res) => {
+app.get('/api/admin/quality', requireAdmin, (req, res) => {
   res.json(getDataQuality());
 });
 
-// ─── Digest endpoints ───────────────────────────────────────────
-
-app.get('/api/admin/digest', (req, res) => {
+app.get('/api/admin/digest', requireAdmin, (req, res) => {
   const digest = generateDigest();
   res.json(digest);
 });
 
-app.get('/api/admin/digest/html', (req, res) => {
+app.get('/api/admin/digest/html', requireAdmin, (req, res) => {
   const digest = generateDigest();
   const html = renderDigestHTML(digest);
   res.type('html').send(html);
 });
 
-app.get('/api/admin/digest/text', (req, res) => {
+app.get('/api/admin/digest/text', requireAdmin, (req, res) => {
   const digest = generateDigest();
   const text = renderDigestText(digest);
   res.type('text').send(text);
 });
 
-// API: Send digest email now (manual trigger)
-app.post('/api/admin/digest/send', (req, res) => {
+app.post('/api/admin/digest/send', requireAdmin, sendLimiter, (req, res) => {
   const { exec } = require('child_process');
   const mode = req.query.test === 'true' ? '--test' : '';
   exec(`node ${path.join(__dirname, 'send-digest.js')} ${mode}`, (err, stdout, stderr) => {
@@ -220,20 +296,26 @@ app.post('/api/admin/digest/send', (req, res) => {
   });
 });
 
-// Serve admin dashboard
-app.get('/admin', (req, res) => {
+// Serve admin dashboard (auth-protected)
+app.get('/admin', requireAdmin, (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`South Sudan News running at http://localhost:${PORT}`);
+// ─── Start server ──────────────────────────────────────────────
 
-  // ─── Background extraction: runs every 15 minutes independent of traffic ──
+app.listen(PORT, () => {
+  console.log(`Horn Monitor running at http://localhost:${PORT}`);
+  if (ADMIN_TOKEN) {
+    console.log('Admin dashboard protected (ADMIN_TOKEN set)');
+  } else {
+    console.log('WARNING: Admin dashboard is OPEN (set ADMIN_TOKEN in .env to protect it)');
+  }
+
+  // ─── Background extraction: runs every 15 minutes ──────────
   const EXTRACTION_INTERVAL_MS = 15 * 60 * 1000;
 
   async function backgroundFetchAndExtract() {
     try {
-      // Reuse cached clusters if available, otherwise fetch fresh
       let data = cache.get('clusters');
       if (!data) {
         console.log('[background] Fetching fresh articles for extraction...');
@@ -263,7 +345,7 @@ app.listen(PORT, () => {
     console.log(`Background extraction scheduled every ${EXTRACTION_INTERVAL_MS / 60000} minutes`);
   }
 
-  // ─── Weekly digest email: Monday 7:00 AM (server timezone) ──────
+  // ─── Weekly digest email: Monday 7:00 AM (server timezone) ──
   if (process.env.SMTP_HOST && process.env.SMTP_USER) {
     const DIGEST_DAY = 1;  // Monday
     const DIGEST_HOUR = 7; // 7:00 AM
@@ -274,7 +356,6 @@ app.listen(PORT, () => {
       next.setDate(next.getDate() + ((DIGEST_DAY + 7 - next.getDay()) % 7 || 7));
       next.setHours(DIGEST_HOUR, 0, 0, 0);
 
-      // If it's Monday before 7 AM, send today
       if (now.getDay() === DIGEST_DAY && now.getHours() < DIGEST_HOUR) {
         next.setDate(now.getDate());
       }
@@ -294,7 +375,6 @@ app.listen(PORT, () => {
         } catch (err) {
           console.error('[digest] Error:', err.message);
         }
-        // Schedule the next one
         scheduleNextDigest();
       }, msUntil);
     }

@@ -573,7 +573,7 @@ a:hover { color: #8AAAC0; }
   const sevNote = d.dataPoints.highSevRawCount !== d.dataPoints.highSevCount
     ? `${d.dataPoints.highSevRawCount} severity 4-5 events consolidated into ${d.dataPoints.highSevCount} items`
     : `${d.dataPoints.highSevCount} severity 4-5 events`;
-  html += `<div class="footer">Structured event extraction across ${sourceCount} monitored sources covering ${d.dataPoints.countriesThisWeek.join(', ') || 'Horn of Africa'}. ${d.dataPoints.eventsThisWeek} events processed, ${sevNote}.</div>`;
+  html += `<div class="footer">Structured event extraction across ${sourceCount} monitored sources covering ${d.dataPoints.countriesThisWeek.join(', ') || 'Horn of Africa'}. ${d.dataPoints.eventsThisWeek} events processed, ${sevNote}.<br><a href="{{UNSUBSCRIBE_URL}}" style="color:#4A4A54">Unsubscribe</a></div>`;
 
   html += '</body></html>';
   return html;

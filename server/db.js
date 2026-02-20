@@ -89,6 +89,14 @@ function initDB() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_quarantine_hash ON quarantine_events(cluster_hash);
+
+    -- Unsubscribe: tracks opted-out email addresses
+    CREATE TABLE IF NOT EXISTS unsubscribes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      token TEXT NOT NULL UNIQUE,
+      unsubscribed_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   // Migrations: add columns if missing (for existing DBs)
@@ -431,9 +439,35 @@ function getActorCountsForPeriod(startDate, endDate) {
     .map(([actor, count]) => ({ actor, count }));
 }
 
+// ─── Unsubscribe management ─────────────────────────────────────
+
+function generateUnsubToken(email) {
+  return crypto.createHash('sha256').update(email + ':horn-monitor-unsub').digest('hex').slice(0, 32);
+}
+
+function isUnsubscribed(email) {
+  if (!db) return false;
+  return !!db.prepare('SELECT 1 FROM unsubscribes WHERE email = ?').get(email.toLowerCase().trim());
+}
+
+function addUnsubscribe(email, token) {
+  if (!db) return false;
+  try {
+    db.prepare('INSERT OR IGNORE INTO unsubscribes (email, token) VALUES (?, ?)').run(email.toLowerCase().trim(), token);
+    return true;
+  } catch { return false; }
+}
+
+function verifyUnsubToken(token) {
+  if (!db) return null;
+  const row = db.prepare('SELECT email FROM unsubscribes WHERE token = ?').get(token);
+  return row ? row.email : null;
+}
+
 module.exports = {
   initDB, clusterHash, eventExists, insertEvent, insertQuarantine,
   getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion,
   getDataQuality,
   getEventsForPeriod, getTypeCountsForPeriod, getRegionSeverityForPeriod, getActorCountsForPeriod,
+  generateUnsubToken, isUnsubscribed, addUnsubscribe, verifyUnsubToken,
 };
