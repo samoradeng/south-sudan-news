@@ -186,7 +186,7 @@ function extractImage(item) {
 async function scrapeOgImage(articleUrl) {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     const res = await fetch(articleUrl, {
       signal: controller.signal,
@@ -230,26 +230,27 @@ async function scrapeOgImage(articleUrl) {
 }
 
 async function enrichWithImages(articles) {
-  // Only scrape og:image for non-Google-News articles (Google URLs can't be resolved server-side)
-  const scrapable = articles.filter(
-    (a) => !a.image && !a.url.includes('news.google.com/')
-  );
+  const scrapable = articles.filter((a) => !a.image);
   if (scrapable.length === 0) return;
 
-  const toScrape = scrapable.slice(0, 40);
-  console.log(`Scraping og:image for ${toScrape.length} direct-feed articles...`);
-
-  const results = await Promise.allSettled(
-    toScrape.map((a) => scrapeOgImage(a.url))
-  );
+  // Scrape in batches of 10 to avoid overwhelming the network
+  const BATCH_SIZE = 10;
+  const toScrape = scrapable.slice(0, 60);
+  console.log(`Scraping og:image for ${toScrape.length} articles without images...`);
 
   let found = 0;
-  results.forEach((r, i) => {
-    if (r.status === 'fulfilled' && r.value) {
-      toScrape[i].image = r.value;
-      found++;
-    }
-  });
+  for (let i = 0; i < toScrape.length; i += BATCH_SIZE) {
+    const batch = toScrape.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map((a) => scrapeOgImage(a.url))
+    );
+    results.forEach((r, j) => {
+      if (r.status === 'fulfilled' && r.value) {
+        batch[j].image = r.value;
+        found++;
+      }
+    });
+  }
 
   console.log(`Found ${found} og:images out of ${toScrape.length} scraped`);
 }
