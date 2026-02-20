@@ -3,7 +3,7 @@ const path = require('path');
 const NodeCache = require('node-cache');
 const { fetchAllSources } = require('./fetcher');
 const { clusterArticles } = require('./cluster');
-const { initGroq, summarizeClusters, deepSummarizeCluster, answerFollowUp } = require('./summarizer');
+const { initGroq, extractiveSummary, deepSummarizeCluster, answerFollowUp } = require('./summarizer');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
@@ -50,7 +50,12 @@ app.get('/api/news', async (req, res) => {
     const clusters = clusterArticles(articles);
     console.log(`Grouped into ${clusters.length} story clusters`);
 
-    const summarized = await summarizeClusters(clusters);
+    // Use extractive summaries for instant feed loading (no AI calls).
+    // AI summaries are generated on-demand when user clicks into a story.
+    const summarized = clusters.map((c) => ({
+      ...c,
+      summary: extractiveSummary(c),
+    }));
 
     const response = {
       clusters: summarized,

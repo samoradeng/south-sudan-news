@@ -298,6 +298,7 @@ async function answerFollowUp(cluster, question) {
 
 module.exports = {
   initGroq,
+  extractiveSummary,
   summarizeClusters,
   summarizeCluster,
   deepSummarizeCluster,
