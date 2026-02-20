@@ -215,50 +215,136 @@ function extractImage(item) {
 
 // ─── og:image scraping ──────────────────────────────────────────
 
+function extractOgImage(html) {
+  const head = html.slice(0, 50000);
+
+  // og:image (both attribute orders)
+  const ogMatch =
+    head.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+    head.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+  if (ogMatch && ogMatch[1]) {
+    let imgUrl = ogMatch[1];
+    if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+    return imgUrl;
+  }
+
+  // twitter:image fallback
+  const twMatch =
+    head.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i) ||
+    head.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i);
+  if (twMatch && twMatch[1]) {
+    let imgUrl = twMatch[1];
+    if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+    return imgUrl;
+  }
+
+  return null;
+}
+
+// Extract redirect target from a Google News redirector page
+function extractGoogleRedirect(html) {
+  const head = html.slice(0, 30000);
+
+  // meta http-equiv="refresh" content="0;url=..."
+  const metaRefresh = head.match(/http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"'\s>]+)/i);
+  if (metaRefresh?.[1] && !metaRefresh[1].includes('google.com')) return metaRefresh[1];
+
+  // window.location = "..." or window.location.href = "..."
+  const jsRedirect = head.match(/window\.location(?:\.href)?\s*=\s*["'](https?:\/\/[^"']+)["']/i);
+  if (jsRedirect?.[1] && !jsRedirect[1].includes('google.com')) return jsRedirect[1];
+
+  // data-url attribute
+  const dataUrl = head.match(/data-url=["'](https?:\/\/[^"']+)["']/i);
+  if (dataUrl?.[1] && !dataUrl[1].includes('google.com')) return dataUrl[1];
+
+  // First external <a href> in body
+  const aHref = head.match(/<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*>/i);
+  if (aHref?.[1] && !aHref[1].includes('google.com')) return aHref[1];
+
+  return null;
+}
+
+async function fetchPage(url, timeout = 8000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const res = await fetch(url, {
+    signal: controller.signal,
+    headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html' },
+    redirect: 'follow',
+  });
+  clearTimeout(timeoutId);
+  if (!res.ok) return { html: null, finalUrl: res.url };
+  const html = await res.text();
+  return { html, finalUrl: res.url };
+}
+
 async function scrapeOgImage(articleUrl) {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const isGoogleUrl = articleUrl.includes('news.google.com/');
+    const { html, finalUrl } = await fetchPage(articleUrl);
+    if (!html) return null;
 
-    const res = await fetch(articleUrl, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': BROWSER_UA,
-        Accept: 'text/html',
-      },
-      redirect: 'follow',
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) return null;
-
-    const text = await res.text();
-    const head = text.slice(0, 50000);
-
-    // og:image (both attribute orders)
-    const ogMatch =
-      head.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
-      head.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
-    if (ogMatch && ogMatch[1]) {
-      let imgUrl = ogMatch[1];
-      if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-      return imgUrl;
+    // If we landed on a Google redirector page, extract the real URL and follow it
+    if (isGoogleUrl || finalUrl.includes('google.com')) {
+      const realUrl = extractGoogleRedirect(html);
+      if (realUrl) {
+        const { html: realHtml } = await fetchPage(realUrl, 5000);
+        if (realHtml) return extractOgImage(realHtml);
+      }
+      return null; // Stuck on Google — no image possible
     }
 
-    // twitter:image fallback
-    const twMatch =
-      head.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i) ||
-      head.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i);
-    if (twMatch && twMatch[1]) {
-      let imgUrl = twMatch[1];
-      if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-      return imgUrl;
-    }
-
-    return null;
+    return extractOgImage(html);
   } catch {
     return null;
   }
+}
+
+// ─── Async Google News URL resolution (bulk) ────────────────────
+// For articles where the sync Base64/description methods failed,
+// fetch the Google redirector page and extract the real URL.
+
+async function resolveGoogleRedirects(articles) {
+  const googleArticles = articles.filter(
+    (a) => !a.image && a.url.includes('news.google.com/')
+  );
+  if (googleArticles.length === 0) return;
+
+  console.log(`Resolving ${googleArticles.length} unresolved Google News URLs...`);
+
+  const BATCH_SIZE = 10;
+  let resolved = 0;
+
+  for (let i = 0; i < googleArticles.length; i += BATCH_SIZE) {
+    const batch = googleArticles.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map(async (a) => {
+        try {
+          const { html, finalUrl } = await fetchPage(a.url, 6000);
+
+          // If HTTP redirect already resolved it
+          if (finalUrl && !finalUrl.includes('google.com')) return finalUrl;
+
+          // Parse the Google redirector page
+          if (html) {
+            const realUrl = extractGoogleRedirect(html);
+            if (realUrl) return realUrl;
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      })
+    );
+    results.forEach((r, j) => {
+      if (r.status === 'fulfilled' && r.value) {
+        batch[j].url = r.value;
+        resolved++;
+      }
+    });
+  }
+
+  console.log(`Resolved ${resolved}/${googleArticles.length} Google News URLs to real articles`);
 }
 
 async function enrichWithImages(articles) {
@@ -338,9 +424,13 @@ async function fetchAllSources() {
   const filtered = articles.filter((a) => new Date(a.publishedAt) >= weekAgo);
 
   const withImages = filtered.filter((a) => a.image).length;
+  const syncResolved = filtered.filter((a) => !a.url.includes('news.google.com/')).length - withImages;
   console.log(`Total: ${filtered.length} articles, ${withImages} with images from RSS`);
 
-  // Scrape og:image for direct-feed articles missing images
+  // Phase 1: Resolve remaining Google News URLs by fetching their redirect pages
+  await resolveGoogleRedirects(filtered);
+
+  // Phase 2: Scrape og:image for articles that now have real URLs
   await enrichWithImages(filtered);
 
   const finalImages = filtered.filter((a) => a.image).length;
