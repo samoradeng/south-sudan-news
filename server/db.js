@@ -356,8 +356,84 @@ function getDataQuality() {
   };
 }
 
+// ─── Week-over-week comparison queries (for Risk Delta) ────────
+
+function getEventsForPeriod(startDate, endDate) {
+  if (!db) return [];
+  return db.prepare(
+    `SELECT * FROM events
+     WHERE extracted_at >= ? AND extracted_at < ?
+     ORDER BY severity DESC, published_at DESC`
+  ).all(startDate, endDate);
+}
+
+function getTypeCountsForPeriod(startDate, endDate) {
+  if (!db) return [];
+  return db.prepare(
+    `SELECT event_type, COUNT(*) as count, ROUND(AVG(severity), 1) as avg_severity
+     FROM events
+     WHERE extracted_at >= ? AND extracted_at < ?
+     GROUP BY event_type ORDER BY count DESC`
+  ).all(startDate, endDate);
+}
+
+function getRegionSeverityForPeriod(startDate, endDate) {
+  if (!db) return [];
+  const events = db.prepare(
+    `SELECT regions, severity FROM events
+     WHERE extracted_at >= ? AND extracted_at < ?`
+  ).all(startDate, endDate);
+
+  const regionScores = {};
+  for (const row of events) {
+    try {
+      const regions = JSON.parse(row.regions || '[]');
+      for (const region of regions) {
+        const r = region.trim();
+        if (!r) continue;
+        if (!regionScores[r]) regionScores[r] = { count: 0, severitySum: 0 };
+        regionScores[r].count++;
+        regionScores[r].severitySum += row.severity;
+      }
+    } catch { /* skip */ }
+  }
+
+  return Object.entries(regionScores)
+    .map(([region, data]) => ({
+      region,
+      count: data.count,
+      severityWeighted: Math.round(data.severitySum * 10) / 10,
+      avgSeverity: Math.round((data.severitySum / data.count) * 10) / 10,
+    }))
+    .sort((a, b) => b.severityWeighted - a.severityWeighted);
+}
+
+function getActorCountsForPeriod(startDate, endDate) {
+  if (!db) return [];
+  const events = db.prepare(
+    `SELECT actors_normalized, actors FROM events
+     WHERE extracted_at >= ? AND extracted_at < ?`
+  ).all(startDate, endDate);
+
+  const counts = {};
+  for (const row of events) {
+    try {
+      const actors = JSON.parse(row.actors_normalized || row.actors || '[]');
+      for (const actor of actors) {
+        const a = actor.trim();
+        if (a) counts[a] = (counts[a] || 0) + 1;
+      }
+    } catch { /* skip */ }
+  }
+
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([actor, count]) => ({ actor, count }));
+}
+
 module.exports = {
   initDB, clusterHash, eventExists, insertEvent, insertQuarantine,
   getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion,
   getDataQuality,
+  getEventsForPeriod, getTypeCountsForPeriod, getRegionSeverityForPeriod, getActorCountsForPeriod,
 };

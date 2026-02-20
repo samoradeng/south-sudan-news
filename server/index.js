@@ -6,6 +6,7 @@ const { clusterArticles } = require('./cluster');
 const { initGroq, extractiveSummary, deepSummarizeCluster, answerFollowUp } = require('./summarizer');
 const { initDB, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion, getDataQuality } = require('./db');
 const { initExtractor, extractAllEvents } = require('./extractor');
+const { generateDigest, renderDigestHTML, renderDigestText } = require('./digest');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
@@ -185,6 +186,25 @@ app.get('/api/admin/regions', (req, res) => {
 
 app.get('/api/admin/quality', (req, res) => {
   res.json(getDataQuality());
+});
+
+// ─── Digest endpoints ───────────────────────────────────────────
+
+app.get('/api/admin/digest', (req, res) => {
+  const digest = generateDigest();
+  res.json(digest);
+});
+
+app.get('/api/admin/digest/html', (req, res) => {
+  const digest = generateDigest();
+  const html = renderDigestHTML(digest);
+  res.type('html').send(html);
+});
+
+app.get('/api/admin/digest/text', (req, res) => {
+  const digest = generateDigest();
+  const text = renderDigestText(digest);
+  res.type('text').send(text);
 });
 
 // Serve admin dashboard
