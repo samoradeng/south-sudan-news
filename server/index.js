@@ -8,7 +8,7 @@ const { initDB, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors
 const { initExtractor, extractAllEvents } = require('./extractor');
 const { generateDigest, renderDigestHTML, renderDigestText } = require('./digest');
 
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
