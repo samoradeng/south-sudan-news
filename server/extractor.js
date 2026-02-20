@@ -253,15 +253,29 @@ async function extractEventData(cluster) {
         { role: 'system', content: EXTRACTION_PROMPT },
         { role: 'user', content: `Extract structured event data from these articles:\n\n${articlesText}` },
       ],
-      max_tokens: 500,
+      max_tokens: 700,
       temperature: 0.1,
     });
 
     rawOutput = response.choices[0]?.message?.content?.trim();
     if (!rawOutput) return null;
 
-    // Parse JSON (strip any markdown fencing the model might add)
-    const jsonStr = rawOutput.replace(/^```json?\n?/i, '').replace(/\n?```$/i, '').trim();
+    // Parse JSON (strip markdown fencing — handle all common variants)
+    let jsonStr = rawOutput;
+    // Strip ```json ... ``` or ``` ... ``` (greedy, handles extra whitespace)
+    const fenceMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+    if (fenceMatch) {
+      jsonStr = fenceMatch[1];
+    }
+    jsonStr = jsonStr.trim();
+
+    // Handle truncated JSON from hitting max_tokens
+    if (!jsonStr.endsWith('}')) {
+      // Try to salvage: close any open strings and braces
+      jsonStr = jsonStr.replace(/,?\s*"[^"]*$/, '');  // Remove incomplete key/value
+      if (!jsonStr.endsWith('}')) jsonStr += '}';
+    }
+
     const data = JSON.parse(jsonStr);
 
     // ── Validate ──────────────────────────────────────────────
