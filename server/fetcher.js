@@ -174,7 +174,7 @@ async function enrichWithImages(articles) {
   );
   if (scrapable.length === 0) return;
 
-  const toScrape = scrapable.slice(0, 20);
+  const toScrape = scrapable.slice(0, 40);
   console.log(`Scraping og:image for ${toScrape.length} direct-feed articles...`);
 
   const results = await Promise.allSettled(

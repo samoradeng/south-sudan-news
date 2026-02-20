@@ -1,16 +1,27 @@
 // RSS feed sources for South Sudan news — all free, no API keys needed
 //
-// Strategy: Use DIRECT feeds (BBC, Sudan Tribune, UN News, etc.) for articles
-// with images, plus Google News for broad discovery. Clustering combines
-// articles from multiple sources, so image-rich direct feed articles provide
-// images for clusters that also contain imageless Google News articles.
+// Strategy: Use DIRECT feeds for articles with images, plus Google News
+// for broad discovery. Clustering combines both, so image-rich direct
+// feed articles provide images for clusters containing Google News articles.
 
 const sources = [
-  // ─── Direct feeds (include images via media:thumbnail, enclosure, etc.) ───
+  // ─── Direct feeds with images (media:thumbnail, media:content, etc.) ──────
 
   {
     name: 'BBC Africa',
     url: 'https://feeds.bbci.co.uk/news/world/africa/rss.xml',
+    category: 'international',
+    reliability: 'high',
+  },
+  {
+    name: 'The Guardian Africa',
+    url: 'https://www.theguardian.com/world/africa/rss',
+    category: 'international',
+    reliability: 'high',
+  },
+  {
+    name: 'France24 Africa',
+    url: 'https://www.france24.com/en/africa/rss',
     category: 'international',
     reliability: 'high',
   },
@@ -21,16 +32,19 @@ const sources = [
     reliability: 'high',
   },
   {
-    name: 'Sudan Tribune',
-    url: 'https://sudantribune.com/feed/',
-    category: 'regional',
-    reliability: 'medium',
-  },
-  {
     name: 'UN News Africa',
     url: 'https://news.un.org/feed/subscribe/en/news/region/africa/feed/rss.xml',
     category: 'international',
     reliability: 'high',
+  },
+
+  // ─── Direct feeds, South Sudan focused (images via content HTML) ──────────
+
+  {
+    name: 'Sudan Tribune',
+    url: 'https://sudantribune.net/feed/',
+    category: 'regional',
+    reliability: 'medium',
   },
   {
     name: 'Radio Tamazuj',
@@ -39,14 +53,20 @@ const sources = [
     reliability: 'high',
   },
   {
-    name: 'ReliefWeb',
-    url: 'https://reliefweb.int/updates/rss.xml?search=%22south+sudan%22',
-    category: 'humanitarian',
-    reliability: 'high',
-  },
-  {
     name: 'Eye Radio',
     url: 'https://eyeradio.org/feed/',
+    category: 'local',
+    reliability: 'medium',
+  },
+  {
+    name: 'Dabanga Radio',
+    url: 'https://www.dabangasudan.org/en/feed',
+    category: 'regional',
+    reliability: 'medium',
+  },
+  {
+    name: 'Nyamilepedia',
+    url: 'https://nyamile.com/feed/',
     category: 'local',
     reliability: 'medium',
   },
