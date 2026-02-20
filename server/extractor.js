@@ -409,4 +409,4 @@ async function extractAllEvents(clusters) {
   console.log(`Event extraction complete: ${extracted} extracted, ${quarantined} skipped/quarantined`);
 }
 
-module.exports = { initExtractor, extractAllEvents, getSourceTier };
+module.exports = { initExtractor, extractAllEvents, getSourceTier, normalizeActor, normalizeActors };
