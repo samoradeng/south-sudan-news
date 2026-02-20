@@ -207,6 +207,19 @@ app.get('/api/admin/digest/text', (req, res) => {
   res.type('text').send(text);
 });
 
+// API: Send digest email now (manual trigger)
+app.post('/api/admin/digest/send', (req, res) => {
+  const { exec } = require('child_process');
+  const mode = req.query.test === 'true' ? '--test' : '';
+  exec(`node ${path.join(__dirname, 'send-digest.js')} ${mode}`, (err, stdout, stderr) => {
+    const output = (stdout || '') + (stderr || '');
+    if (err) {
+      return res.status(500).json({ error: 'Send failed', output: output.trim() });
+    }
+    res.json({ message: 'Digest sent', output: output.trim() });
+  });
+});
+
 // Serve admin dashboard
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
@@ -248,5 +261,44 @@ app.listen(PORT, () => {
   if (process.env.GROQ_API_KEY) {
     setInterval(backgroundFetchAndExtract, EXTRACTION_INTERVAL_MS);
     console.log(`Background extraction scheduled every ${EXTRACTION_INTERVAL_MS / 60000} minutes`);
+  }
+
+  // ─── Weekly digest email: Monday 7:00 AM (server timezone) ──────
+  if (process.env.SMTP_HOST && process.env.SMTP_USER) {
+    const DIGEST_DAY = 1;  // Monday
+    const DIGEST_HOUR = 7; // 7:00 AM
+
+    function scheduleNextDigest() {
+      const now = new Date();
+      const next = new Date(now);
+      next.setDate(next.getDate() + ((DIGEST_DAY + 7 - next.getDay()) % 7 || 7));
+      next.setHours(DIGEST_HOUR, 0, 0, 0);
+
+      // If it's Monday before 7 AM, send today
+      if (now.getDay() === DIGEST_DAY && now.getHours() < DIGEST_HOUR) {
+        next.setDate(now.getDate());
+      }
+
+      const msUntil = next - now;
+      console.log(`Weekly digest scheduled for ${next.toLocaleString()} (in ${Math.round(msUntil / 3600000)}h)`);
+
+      setTimeout(async () => {
+        try {
+          console.log('[digest] Sending weekly email digest...');
+          const { exec } = require('child_process');
+          exec('node ' + path.join(__dirname, 'send-digest.js'), (err, stdout, stderr) => {
+            if (stdout) console.log(stdout.trim());
+            if (stderr) console.error(stderr.trim());
+            if (err) console.error('[digest] Send failed:', err.message);
+          });
+        } catch (err) {
+          console.error('[digest] Error:', err.message);
+        }
+        // Schedule the next one
+        scheduleNextDigest();
+      }, msUntil);
+    }
+
+    scheduleNextDigest();
   }
 });
