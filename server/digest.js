@@ -11,6 +11,8 @@ const {
 
 // ─── Helpers ────────────────────────────────────────────────────
 
+const MIN_BASELINE_EVENTS = 5; // Suppress % deltas below this threshold
+
 function getWeekBounds(weeksAgo = 0) {
   const now = new Date();
   const end = new Date(now);
@@ -34,7 +36,8 @@ function pctChange(current, previous) {
   return Math.round(((current - previous) / previous) * 100);
 }
 
-function formatChange(pct) {
+function formatChange(pct, baselineWeak) {
+  if (baselineWeak) return 'new';
   if (pct > 0) return `+${pct}%`;
   if (pct < 0) return `${pct}%`;
   return 'unchanged';
@@ -48,6 +51,87 @@ function getISOWeekNumber(date) {
   return 1 + Math.round(((d - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
 }
 
+// ─── Event deduplication for digest ─────────────────────────────
+// Groups high-severity events that describe the same story into bundles.
+// Uses region + eventSubtype + severity overlap to detect near-duplicates.
+
+function bundleHighSeverityEvents(events) {
+  const bundles = [];
+
+  for (const event of events) {
+    const evRegions = safeJSON(event.regions);
+    const evKey = [
+      event.country,
+      event.event_type,
+      event.event_subtype || '',
+      event.severity,
+    ].join('|').toLowerCase();
+
+    // Try to merge into existing bundle with overlapping region + type
+    let merged = false;
+    for (const bundle of bundles) {
+      const bKey = [
+        bundle.country,
+        bundle.eventType,
+        bundle.eventSubtype || '',
+        bundle.severity,
+      ].join('|').toLowerCase();
+
+      // Same country + type + subtype + severity, and overlapping regions
+      const bRegions = bundle.regions.map(r => r.toLowerCase());
+      const hasRegionOverlap = evRegions.length === 0 || bRegions.length === 0 ||
+        evRegions.some(r => bRegions.includes(r.toLowerCase()));
+
+      if (bKey === evKey && hasRegionOverlap) {
+        bundle.sourceCount += event.article_count || 1;
+        bundle.sources.push(...safeJSON(event.sources));
+        // Merge in any new regions
+        for (const r of evRegions) {
+          if (!bundle.regions.some(br => br.toLowerCase() === r.toLowerCase())) {
+            bundle.regions.push(r);
+          }
+        }
+        // Keep the best URL (first one)
+        if (!bundle.primaryUrl && event.primary_url) {
+          bundle.primaryUrl = event.primary_url;
+        }
+        // Collect article URLs
+        bundle.articleUrls.push(...safeJSON(event.article_urls));
+        merged = true;
+        break;
+      }
+    }
+
+    if (!merged) {
+      bundles.push({
+        summary: event.summary,
+        severity: event.severity,
+        eventType: event.event_type,
+        eventSubtype: event.event_subtype,
+        country: event.country,
+        regions: evRegions,
+        actors: safeJSON(event.actors_normalized || event.actors),
+        rationale: event.rationale,
+        verificationStatus: event.verification_status,
+        confidence: event.confidence,
+        primaryUrl: event.primary_url,
+        publishedAt: event.published_at,
+        sourceCount: event.article_count || 1,
+        sources: [...new Set(safeJSON(event.sources))],
+        articleUrls: safeJSON(event.article_urls),
+      });
+    }
+  }
+
+  // Deduplicate source names in each bundle
+  for (const b of bundles) {
+    b.sources = [...new Set(b.sources)];
+    b.articleUrls = [...new Set(b.articleUrls)];
+  }
+
+  return bundles;
+}
+
 // ─── Main digest generator ──────────────────────────────────────
 
 function generateDigest() {
@@ -57,6 +141,9 @@ function generateDigest() {
   // Events
   const twEvents = getEventsForPeriod(thisWeek.start, thisWeek.end);
   const lwEvents = getEventsForPeriod(lastWeek.start, lastWeek.end);
+
+  // Determine if baseline is too weak for meaningful % comparison
+  const baselineWeak = lwEvents.length < MIN_BASELINE_EVENTS;
 
   // Type counts
   const twTypes = getTypeCountsForPeriod(thisWeek.start, thisWeek.end);
@@ -100,27 +187,13 @@ function generateDigest() {
     totalThisWeek: twEvents.length,
     totalLastWeek: lwEvents.length,
     totalChange: pctChange(twEvents.length, lwEvents.length),
+    baselineWeak,
     typeShifts,
   };
 
-  // ── Section 2: High-Severity Events ───────────────────────
-  const highSeverity = twEvents
-    .filter((e) => e.severity >= 4)
-    .slice(0, 8)
-    .map((e) => ({
-      summary: e.summary,
-      severity: e.severity,
-      eventType: e.event_type,
-      eventSubtype: e.event_subtype,
-      country: e.country,
-      regions: safeJSON(e.regions),
-      actors: safeJSON(e.actors_normalized || e.actors),
-      rationale: e.rationale,
-      verificationStatus: e.verification_status,
-      confidence: e.confidence,
-      primaryUrl: e.primary_url,
-      publishedAt: e.published_at,
-    }));
+  // ── Section 2: High-Severity Events (bundled) ──────────────
+  const rawHighSev = twEvents.filter((e) => e.severity >= 4);
+  const highSeverity = bundleHighSeverityEvents(rawHighSev).slice(0, 8);
 
   // ── Section 3: Hot Regions ────────────────────────────────
   const lwRegionMap = Object.fromEntries(lwRegions.map((r) => [r.region, r]));
@@ -163,6 +236,7 @@ function generateDigest() {
       eventsLastWeek: lwEvents.length,
       highSevCount: highSeverity.length,
       countriesThisWeek: [...new Set(twEvents.map((e) => e.country))],
+      baselineWeak,
     },
   };
 }
@@ -178,12 +252,14 @@ const SEV_LABELS = { 1: 'Routine', 2: 'Notable', 3: 'Significant', 4: 'Major', 5
 
 function renderDigestHTML(digest) {
   const d = digest;
+  const bw = d.topline.baselineWeak;
 
   let html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><style>
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d0d12; color: #d0d0d0; max-width: 680px; margin: 0 auto; padding: 32px 24px; line-height: 1.6; }
 h1 { font-size: 20px; color: #fff; margin-bottom: 4px; }
 .subtitle { color: #666; font-size: 13px; margin-bottom: 32px; }
+.baseline-note { color: #886; font-size: 12px; font-style: italic; margin-bottom: 16px; }
 h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; margin: 28px 0 14px 0; padding-bottom: 6px; border-bottom: 1px solid #1a1a2a; }
 .topline-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #111118; font-size: 14px; }
 .topline-type { color: #bbb; }
@@ -191,17 +267,19 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; color: #
 .change-up { color: #e74c3c; font-weight: 600; }
 .change-down { color: #2ecc71; font-weight: 600; }
 .change-flat { color: #666; }
+.change-new { color: #f39c12; font-weight: 600; }
 .event-card { background: #111118; border-left: 4px solid #e74c3c; border-radius: 6px; padding: 14px 18px; margin-bottom: 12px; }
 .event-card.sev-5 { border-left-color: #c0392b; background: #130a0a; }
 .event-card .ev-summary { font-size: 14px; color: #ddd; font-weight: 500; margin-bottom: 6px; }
 .event-card .ev-meta { font-size: 12px; color: #777; }
-.event-card .ev-rationale { font-size: 12px; color: #666; font-style: italic; margin-top: 6px; }
+.event-card .ev-rationale { font-size: 12px; color: #999; margin-top: 6px; }
+.event-card .ev-sources { font-size: 11px; color: #555; margin-top: 4px; }
 .region-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #111118; font-size: 13px; }
 .actor-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #111118; font-size: 13px; }
 .badge { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 4px; margin-right: 6px; }
 .badge-sev { background: #3a1a1a; color: #e74c3c; }
 .badge-type { background: #1a1a2e; color: #3498db; }
-.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #1a1a2a; font-size: 11px; color: #444; }
+.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #1a1a2a; font-size: 11px; color: #555; }
 a { color: #3498db; text-decoration: none; }
 </style></head><body>`;
 
@@ -209,58 +287,82 @@ a { color: #3498db; text-decoration: none; }
   html += `<div class="subtitle">${d.period.thisWeek} | Generated ${new Date(d.generatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>`;
 
   // Section 1: Topline
-  html += '<h2>Topline Shift</h2>';
-  const totalChangeClass = d.topline.totalChange > 0 ? 'change-up' : d.topline.totalChange < 0 ? 'change-down' : 'change-flat';
-  html += `<div class="topline-row"><span class="topline-type" style="font-weight:600">Total Events</span><span class="topline-nums">${d.topline.totalThisWeek} this week vs ${d.topline.totalLastWeek} last week <span class="${totalChangeClass}">${formatChange(d.topline.totalChange)}</span></span></div>`;
-
-  for (const t of d.topline.typeShifts) {
-    const cls = t.change > 0 ? 'change-up' : t.change < 0 ? 'change-down' : 'change-flat';
-    html += `<div class="topline-row"><span class="topline-type">${t.type}</span><span class="topline-nums">${t.thisWeek} vs ${t.lastWeek} <span class="${cls}">${formatChange(t.change)}</span></span></div>`;
+  html += '<h2>Topline</h2>';
+  if (bw) {
+    html += '<div class="baseline-note">Baseline week — insufficient prior data for trend comparison. Raw counts shown.</div>';
   }
 
-  // Section 2: High-Severity Events
+  const totalChangeClass = bw ? 'change-new' : (d.topline.totalChange > 0 ? 'change-up' : d.topline.totalChange < 0 ? 'change-down' : 'change-flat');
+  if (bw) {
+    html += `<div class="topline-row"><span class="topline-type" style="font-weight:600">Total Events</span><span class="topline-nums">${d.topline.totalThisWeek} events tracked</span></div>`;
+  } else {
+    html += `<div class="topline-row"><span class="topline-type" style="font-weight:600">Total Events</span><span class="topline-nums">${d.topline.totalThisWeek} vs ${d.topline.totalLastWeek} <span class="${totalChangeClass}">${formatChange(d.topline.totalChange, bw)}</span></span></div>`;
+  }
+
+  for (const t of d.topline.typeShifts) {
+    if (bw) {
+      html += `<div class="topline-row"><span class="topline-type">${t.type}</span><span class="topline-nums">${t.thisWeek} events (avg sev ${t.avgSeverity})</span></div>`;
+    } else {
+      const cls = t.change > 0 ? 'change-up' : t.change < 0 ? 'change-down' : 'change-flat';
+      html += `<div class="topline-row"><span class="topline-type">${t.type}</span><span class="topline-nums">${t.thisWeek} vs ${t.lastWeek} <span class="${cls}">${formatChange(t.change, bw)}</span></span></div>`;
+    }
+  }
+
+  // Section 2: High-Severity Events (bundled)
   html += '<h2>High-Severity Events</h2>';
   if (d.highSeverity.length === 0) {
-    html += '<div style="color:#555; font-size:13px; padding:12px 0">No severity 4-5 events this week</div>';
+    html += '<div style="color:#555; font-size:13px; padding:12px 0">No severity 4–5 events this week.</div>';
   }
   for (const e of d.highSeverity) {
     const sevClass = e.severity >= 5 ? 'sev-5' : '';
     html += `<div class="event-card ${sevClass}">`;
     html += `<div class="ev-summary">${escHTML(e.summary)}</div>`;
     html += `<div class="ev-meta">`;
-    html += `<span class="badge badge-sev">SEV ${e.severity}</span>`;
+    html += `<span class="badge badge-sev">${SEV_LABELS[e.severity] || 'SEV ' + e.severity}</span>`;
     html += `<span class="badge badge-type">${e.eventType}${e.eventSubtype ? '/' + e.eventSubtype : ''}</span>`;
     html += `${e.country}${e.regions.length ? ' / ' + e.regions.join(', ') : ''} `;
-    html += `| ${e.verificationStatus} | conf ${e.confidence}`;
+    html += `| ${e.verificationStatus}`;
     if (e.primaryUrl) html += ` | <a href="${escHTML(e.primaryUrl)}">source</a>`;
     html += '</div>';
-    if (e.rationale) html += `<div class="ev-rationale">"${escHTML(e.rationale)}"</div>`;
+    if (e.rationale) html += `<div class="ev-rationale">${escHTML(e.rationale)}</div>`;
+    if (e.sourceCount > 1) {
+      html += `<div class="ev-sources">${e.sourceCount} articles across ${e.sources.length} sources: ${e.sources.join(', ')}</div>`;
+    }
     html += '</div>';
   }
 
   // Section 3: Hot Regions
   html += '<h2>Hot Regions</h2>';
   if (d.hotRegions.length === 0) {
-    html += '<div style="color:#555; font-size:13px; padding:12px 0">No regional data this week</div>';
+    html += '<div style="color:#555; font-size:13px; padding:12px 0">No regional data this week.</div>';
   }
   for (const r of d.hotRegions) {
-    const cls = r.change > 0 ? 'change-up' : r.change < 0 ? 'change-down' : 'change-flat';
-    html += `<div class="region-row"><span style="color:#bbb">${escHTML(r.region)}</span><span style="color:#888">${r.count} events (avg sev ${r.avgSeverity}) <span class="${cls}">${formatChange(r.change)} WoW</span></span></div>`;
+    if (bw) {
+      html += `<div class="region-row"><span style="color:#bbb">${escHTML(r.region)}</span><span style="color:#888">${r.count} events (avg sev ${r.avgSeverity})</span></div>`;
+    } else {
+      const cls = r.change > 0 ? 'change-up' : r.change < 0 ? 'change-down' : 'change-flat';
+      html += `<div class="region-row"><span style="color:#bbb">${escHTML(r.region)}</span><span style="color:#888">${r.count} events (avg sev ${r.avgSeverity}) <span class="${cls}">${formatChange(r.change, bw)} WoW</span></span></div>`;
+    }
   }
 
   // Section 4: Actor Spikes
-  html += '<h2>Actor Spikes</h2>';
+  html += '<h2>Actor Activity</h2>';
   const spikes = d.actorSpikes.filter((a) => a.change !== 0).slice(0, 10);
   if (spikes.length === 0) {
-    html += '<div style="color:#555; font-size:13px; padding:12px 0">No significant actor changes</div>';
+    html += '<div style="color:#555; font-size:13px; padding:12px 0">No significant actor changes.</div>';
   }
   for (const a of spikes) {
-    const cls = a.change > 0 ? 'change-up' : a.change < 0 ? 'change-down' : 'change-flat';
-    html += `<div class="actor-row"><span style="color:#bbb">${escHTML(a.actor)}</span><span style="color:#888">${a.thisWeek} mentions (was ${a.lastWeek}) <span class="${cls}">${formatChange(a.change)}</span></span></div>`;
+    if (bw) {
+      html += `<div class="actor-row"><span style="color:#bbb">${escHTML(a.actor)}</span><span style="color:#888">${a.thisWeek} mentions</span></div>`;
+    } else {
+      const cls = a.change > 0 ? 'change-up' : a.change < 0 ? 'change-down' : 'change-flat';
+      html += `<div class="actor-row"><span style="color:#bbb">${escHTML(a.actor)}</span><span style="color:#888">${a.thisWeek} mentions (was ${a.lastWeek}) <span class="${cls}">${formatChange(a.change, bw)}</span></span></div>`;
+    }
   }
 
-  // Footer
-  html += `<div class="footer">Horn Monitor Risk Delta — auto-generated from ${d.dataPoints.eventsThisWeek} events across ${d.dataPoints.countriesThisWeek.join(', ') || 'N/A'}. Data quality: ${d.dataPoints.highSevCount} high-severity events flagged. This report is machine-generated from structured news extraction and should be verified against primary sources.</div>`;
+  // Footer — confident, not defensive
+  const sourceCount = 16; // configured source count
+  html += `<div class="footer">Generated from structured event extraction across ${sourceCount} monitored sources covering ${d.dataPoints.countriesThisWeek.join(', ') || 'Horn of Africa'}. ${d.dataPoints.eventsThisWeek} events processed, ${d.dataPoints.highSevCount} high-severity. Source links included above.</div>`;
 
   html += '</body></html>';
   return html;
@@ -270,16 +372,26 @@ a { color: #3498db; text-decoration: none; }
 
 function renderDigestText(digest) {
   const d = digest;
+  const bw = d.topline.baselineWeak;
   let text = '';
 
   text += `HORN RISK DELTA — WEEK ${d.weekNumber}\n`;
   text += `${d.period.thisWeek}\n`;
   text += `${'─'.repeat(50)}\n\n`;
 
-  text += 'TOPLINE SHIFT\n';
-  text += `  Total: ${d.topline.totalThisWeek} events (${formatChange(d.topline.totalChange)} WoW)\n`;
+  text += 'TOPLINE\n';
+  if (bw) {
+    text += '  (Baseline week — prior data insufficient for trends)\n';
+    text += `  Total: ${d.topline.totalThisWeek} events tracked\n`;
+  } else {
+    text += `  Total: ${d.topline.totalThisWeek} events (${formatChange(d.topline.totalChange, bw)} WoW)\n`;
+  }
   for (const t of d.topline.typeShifts) {
-    text += `  ${t.type}: ${t.thisWeek} (${formatChange(t.change)})\n`;
+    if (bw) {
+      text += `  ${t.type}: ${t.thisWeek} (avg sev ${t.avgSeverity})\n`;
+    } else {
+      text += `  ${t.type}: ${t.thisWeek} (${formatChange(t.change, bw)})\n`;
+    }
   }
 
   text += '\nHIGH-SEVERITY EVENTS\n';
@@ -287,25 +399,35 @@ function renderDigestText(digest) {
     text += '  (none this week)\n';
   }
   for (const e of d.highSeverity) {
-    text += `  [SEV ${e.severity}] ${e.summary}\n`;
-    text += `    ${e.country}${e.regions.length ? ' / ' + e.regions.join(', ') : ''} | ${e.verificationStatus}\n`;
-    if (e.rationale) text += `    Rationale: ${e.rationale}\n`;
+    text += `  [${SEV_LABELS[e.severity] || 'SEV ' + e.severity}] ${e.summary}\n`;
+    text += `    ${e.country}${e.regions.length ? ' / ' + e.regions.join(', ') : ''} | ${e.verificationStatus}`;
+    if (e.sourceCount > 1) text += ` | ${e.sourceCount} articles`;
+    text += '\n';
+    if (e.rationale) text += `    ${e.rationale}\n`;
     text += '\n';
   }
 
   text += 'HOT REGIONS\n';
   for (const r of d.hotRegions.slice(0, 8)) {
-    text += `  ${r.region}: ${r.count} events, avg severity ${r.avgSeverity} (${formatChange(r.change)} WoW)\n`;
+    if (bw) {
+      text += `  ${r.region}: ${r.count} events, avg severity ${r.avgSeverity}\n`;
+    } else {
+      text += `  ${r.region}: ${r.count} events, avg severity ${r.avgSeverity} (${formatChange(r.change, bw)} WoW)\n`;
+    }
   }
 
-  text += '\nACTOR SPIKES\n';
+  text += '\nACTOR ACTIVITY\n';
   const spikes = d.actorSpikes.filter((a) => a.change !== 0).slice(0, 8);
   for (const a of spikes) {
-    text += `  ${a.actor}: ${a.thisWeek} mentions (${formatChange(a.change)} from ${a.lastWeek})\n`;
+    if (bw) {
+      text += `  ${a.actor}: ${a.thisWeek} mentions\n`;
+    } else {
+      text += `  ${a.actor}: ${a.thisWeek} mentions (${formatChange(a.change, bw)} from ${a.lastWeek})\n`;
+    }
   }
 
   text += `\n${'─'.repeat(50)}\n`;
-  text += `Auto-generated | ${d.dataPoints.eventsThisWeek} events | ${d.dataPoints.countriesThisWeek.join(', ')}\n`;
+  text += `Generated from 16 monitored sources | ${d.dataPoints.eventsThisWeek} events | ${d.dataPoints.countriesThisWeek.join(', ')}\n`;
 
   return text;
 }

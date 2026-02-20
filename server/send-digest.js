@@ -16,7 +16,6 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const nodemailer = require('nodemailer');
 const { initDB } = require('./db');
 const { generateDigest, renderDigestHTML, renderDigestText } = require('./digest');
 
@@ -52,6 +51,15 @@ async function main() {
   if (isPreview) {
     console.log(html);
     return;
+  }
+
+  // Load nodemailer only when actually sending (not needed for --preview)
+  let nodemailer;
+  try {
+    nodemailer = require('nodemailer');
+  } catch {
+    console.error('nodemailer is not installed. Run: npm install nodemailer');
+    process.exit(1);
   }
 
   // Validate SMTP config
