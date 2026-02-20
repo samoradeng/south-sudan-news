@@ -1,11 +1,13 @@
-// RSS feed sources for South Sudan news — all free, no API keys needed
+// RSS feed sources for Horn of Africa monitoring — all free, no API keys needed
+//
+// Coverage: South Sudan + Sudan (with architecture ready for Ethiopia expansion)
 //
 // Strategy: Use DIRECT feeds for articles with images, plus Google News
 // for broad discovery. Clustering combines both, so image-rich direct
 // feed articles provide images for clusters containing Google News articles.
 
 const sources = [
-  // ─── Direct feeds with images (media:thumbnail, media:content, etc.) ──────
+  // ─── International feeds (cover both Sudan + South Sudan) ──────────────────
 
   {
     name: 'BBC Africa',
@@ -38,7 +40,7 @@ const sources = [
     reliability: 'high',
   },
 
-  // ─── Direct feeds, South Sudan focused (images via content HTML) ──────────
+  // ─── Regional feeds (Sudan + South Sudan) ─────────────────────────────────
 
   {
     name: 'Sudan Tribune',
@@ -46,6 +48,15 @@ const sources = [
     category: 'regional',
     reliability: 'medium',
   },
+  {
+    name: 'Dabanga Radio',
+    url: 'https://www.dabangasudan.org/en/feed',
+    category: 'regional',
+    reliability: 'medium',
+  },
+
+  // ─── South Sudan local feeds ──────────────────────────────────────────────
+
   {
     name: 'Radio Tamazuj',
     url: 'https://radiotamazuj.org/en/rss',
@@ -59,19 +70,13 @@ const sources = [
     reliability: 'medium',
   },
   {
-    name: 'Dabanga Radio',
-    url: 'https://www.dabangasudan.org/en/feed',
-    category: 'regional',
-    reliability: 'medium',
-  },
-  {
     name: 'Nyamilepedia',
     url: 'https://nyamile.com/feed/',
     category: 'local',
     reliability: 'medium',
   },
 
-  // ─── Google News (broad discovery, no images but wide coverage) ───────────
+  // ─── Google News: South Sudan ─────────────────────────────────────────────
 
   {
     name: 'Google News',
@@ -88,6 +93,27 @@ const sources = [
   {
     name: 'VOA Africa',
     url: 'https://news.google.com/rss/search?q=%22south+sudan%22+site:voanews.com&hl=en-US&gl=US&ceid=US:en',
+    category: 'international',
+    reliability: 'high',
+  },
+
+  // ─── Google News: Sudan ───────────────────────────────────────────────────
+
+  {
+    name: 'Google News Sudan',
+    url: 'https://news.google.com/rss/search?q=sudan+war+OR+sudan+conflict+OR+khartoum+OR+RSF+OR+darfur+-"south+sudan"&hl=en-US&gl=US&ceid=US:en',
+    category: 'general',
+    reliability: 'aggregator',
+  },
+  {
+    name: 'Reuters Sudan',
+    url: 'https://news.google.com/rss/search?q=sudan+site:reuters.com+-"south+sudan"&hl=en-US&gl=US&ceid=US:en',
+    category: 'international',
+    reliability: 'high',
+  },
+  {
+    name: 'VOA Sudan',
+    url: 'https://news.google.com/rss/search?q=sudan+site:voanews.com+-"south+sudan"&hl=en-US&gl=US&ceid=US:en',
     category: 'international',
     reliability: 'high',
   },

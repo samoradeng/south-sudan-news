@@ -38,8 +38,10 @@ async function fetchFeed(url) {
   return parser.parseString(xml);
 }
 
-// Strong keywords: if found in title, article is definitely about South Sudan
-const STRONG_KEYWORDS = [
+// ─── Relevance filtering: South Sudan + Sudan ──────────────────
+
+// Strong keywords: if found in title, article is definitely relevant
+const STRONG_KEYWORDS_SS = [
   'south sudan',
   'south sudanese',
   'salva kiir',
@@ -47,8 +49,23 @@ const STRONG_KEYWORDS = [
   'unmiss',
 ];
 
-// Supporting keywords: need 2+ matches in body to confirm South Sudan relevance
-const SUPPORTING_KEYWORDS = [
+const STRONG_KEYWORDS_SUDAN = [
+  'sudan war',
+  'sudan conflict',
+  'sudan crisis',
+  'sudanese army',
+  'sudanese military',
+  'khartoum',
+  'rsf',
+  'rapid support forces',
+  'abdel fattah al-burhan',
+  'al-burhan',
+  'hemedti',
+  'dagalo',
+];
+
+// Supporting keywords: need 2+ matches in body to confirm relevance
+const SUPPORTING_KEYWORDS_SS = [
   'south sudan',
   'south sudanese',
   'juba',
@@ -72,16 +89,61 @@ const SUPPORTING_KEYWORDS = [
   'spla',
 ];
 
-function isAboutSouthSudan(article) {
+const SUPPORTING_KEYWORDS_SUDAN = [
+  'sudan',
+  'sudanese',
+  'khartoum',
+  'darfur',
+  'el fasher',
+  'al-fashir',
+  'port sudan',
+  'omdurman',
+  'rsf',
+  'rapid support forces',
+  'al-burhan',
+  'hemedti',
+  'dagalo',
+  'saf',
+  'sudan armed forces',
+  'north darfur',
+  'south darfur',
+  'west darfur',
+  'south kordofan',
+  'blue nile',
+  'white nile',
+  'red sea state',
+  'kassala',
+  'gedaref',
+  'gezira',
+  'sennar',
+  'janjaweed',
+];
+
+function isRelevantArticle(article) {
   const title = (article.title || '').toLowerCase();
   const body = `${article.contentSnippet || ''} ${article.content || ''}`.toLowerCase();
 
-  if (STRONG_KEYWORDS.some((kw) => title.includes(kw))) {
-    return true;
+  // South Sudan: strong keyword in title
+  if (STRONG_KEYWORDS_SS.some((kw) => title.includes(kw))) return true;
+
+  // Sudan: strong keyword in title
+  if (STRONG_KEYWORDS_SUDAN.some((kw) => title.includes(kw))) return true;
+
+  // "sudan" in title (but not "south sudan") — check it's about Sudan proper
+  if (title.includes('sudan') && !title.includes('south sudan')) {
+    const bodyMatches = SUPPORTING_KEYWORDS_SUDAN.filter((kw) => body.includes(kw)).length;
+    if (bodyMatches >= 2) return true;
   }
 
-  const bodyMatches = SUPPORTING_KEYWORDS.filter((kw) => body.includes(kw)).length;
-  return bodyMatches >= 2;
+  // Body-level matching for South Sudan
+  const ssBodyMatches = SUPPORTING_KEYWORDS_SS.filter((kw) => body.includes(kw)).length;
+  if (ssBodyMatches >= 2) return true;
+
+  // Body-level matching for Sudan
+  const sdBodyMatches = SUPPORTING_KEYWORDS_SUDAN.filter((kw) => body.includes(kw)).length;
+  if (sdBodyMatches >= 3) return true; // Higher bar for Sudan body-only matches
+
+  return false;
 }
 
 // ─── Image extraction from RSS fields ───────────────────────────
@@ -216,7 +278,7 @@ async function fetchFromSource(source) {
     const feed = await fetchFeed(source.url);
     const articles = (feed.items || [])
       .map((item) => normalizeArticle(item, source.name, source.category, source.reliability))
-      .filter(isAboutSouthSudan);
+      .filter(isRelevantArticle);
     console.log(`  ${source.name}: ${articles.length} articles (${articles.filter((a) => a.image).length} with images)`);
     return articles;
   } catch (err) {

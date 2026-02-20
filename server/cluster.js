@@ -14,8 +14,8 @@ const STOPWORDS = new Set([
   'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just',
   'because', 'but', 'and', 'or', 'if', 'while', 'that', 'this', 'what',
   'which', 'who', 'whom', 'these', 'those', 'it', 'its', 'he', 'she',
-  'they', 'them', 'his', 'her', 'their', 'we', 'us', 'south', 'sudan',
-  'sudanese', 'says', 'said', 'new', 'also', 'about', 'up',
+  'they', 'them', 'his', 'her', 'their', 'we', 'us',
+  'says', 'said', 'new', 'also', 'about', 'up',
 ]);
 
 function tokenize(text) {
