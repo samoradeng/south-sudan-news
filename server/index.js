@@ -4,7 +4,7 @@ const NodeCache = require('node-cache');
 const { fetchAllSources } = require('./fetcher');
 const { clusterArticles } = require('./cluster');
 const { initGroq, extractiveSummary, deepSummarizeCluster, answerFollowUp } = require('./summarizer');
-const { initDB, getEventStats } = require('./db');
+const { initDB, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion } = require('./db');
 const { initExtractor, extractAllEvents } = require('./extractor');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -159,6 +159,33 @@ app.get('/api/health', (req, res) => {
     cacheStats: cache.getStats(),
     eventStats: getEventStats(),
   });
+});
+
+// ─── Admin API endpoints ────────────────────────────────────────
+
+app.get('/api/admin/events', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+  const offset = parseInt(req.query.offset) || 0;
+  res.json({ events: getAllEvents(limit, offset), stats: getEventStats() });
+});
+
+app.get('/api/admin/alerts', (req, res) => {
+  const minSeverity = parseInt(req.query.minSeverity) || 4;
+  const days = parseInt(req.query.days) || 7;
+  res.json({ alerts: getHighSeverityEvents(minSeverity, days) });
+});
+
+app.get('/api/admin/actors', (req, res) => {
+  res.json({ actors: getTopActors() });
+});
+
+app.get('/api/admin/regions', (req, res) => {
+  res.json({ regions: getEventsByRegion() });
+});
+
+// Serve admin dashboard
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
 });
 
 app.listen(PORT, () => {

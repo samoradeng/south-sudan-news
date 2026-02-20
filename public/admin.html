@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Event Monitor — Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      line-height: 1.5;
+    }
+
+    header {
+      background: linear-gradient(135deg, #111118, #1a1a2e);
+      border-bottom: 1px solid #2a2a3a;
+      padding: 20px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 { font-size: 18px; color: #fff; font-weight: 600; }
+    header h1 span { color: #666; font-weight: 400; }
+    .header-stats {
+      display: flex;
+      gap: 24px;
+      font-size: 13px;
+      color: #888;
+    }
+    .header-stats .val { color: #fff; font-weight: 600; font-size: 18px; display: block; }
+
+    .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+    /* ─── Stats cards ─── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+    .stat-card {
+      background: #111118;
+      border: 1px solid #1e1e2e;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .stat-card .label { font-size: 12px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; color: #fff; margin-top: 4px; }
+    .stat-card .sub { font-size: 12px; color: #555; margin-top: 4px; }
+
+    /* ─── Sections ─── */
+    .section { margin-bottom: 32px; }
+    .section h2 {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #666;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #1a1a2a;
+    }
+
+    /* ─── Bar charts ─── */
+    .bar-chart { display: flex; flex-direction: column; gap: 8px; }
+    .bar-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .bar-label {
+      width: 140px;
+      font-size: 13px;
+      text-align: right;
+      color: #aaa;
+      flex-shrink: 0;
+    }
+    .bar-track {
+      flex: 1;
+      height: 24px;
+      background: #111118;
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.6s ease;
+      min-width: 2px;
+    }
+    .bar-count {
+      width: 40px;
+      font-size: 13px;
+      color: #888;
+      font-weight: 600;
+    }
+
+    /* Type colors */
+    .type-security { background: #e74c3c; }
+    .type-political { background: #3498db; }
+    .type-economic { background: #f39c12; }
+    .type-humanitarian { background: #e67e22; }
+    .type-infrastructure { background: #9b59b6; }
+    .type-legal { background: #1abc9c; }
+
+    /* Severity colors */
+    .sev-1 { background: #2ecc71; }
+    .sev-2 { background: #27ae60; }
+    .sev-3 { background: #f39c12; }
+    .sev-4 { background: #e74c3c; }
+    .sev-5 { background: #c0392b; }
+
+    /* ─── Alerts ─── */
+    .alert-list { display: flex; flex-direction: column; gap: 12px; }
+    .alert-card {
+      background: #111118;
+      border: 1px solid #2a1a1a;
+      border-left: 4px solid #e74c3c;
+      border-radius: 8px;
+      padding: 16px 20px;
+    }
+    .alert-card.sev-5 { border-left-color: #c0392b; background: #140a0a; }
+    .alert-card.sev-4 { border-left-color: #e74c3c; }
+    .alert-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .alert-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .alert-badges { display: flex; gap: 8px; }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .badge-severity { background: #3a1a1a; color: #e74c3c; }
+    .badge-type { background: #1a1a2e; color: #3498db; }
+    .badge-scope { background: #1a2a1a; color: #2ecc71; }
+    .badge-verified { background: #1a2a1a; color: #2ecc71; }
+    .badge-reported { background: #2a2a1a; color: #f39c12; }
+    .badge-unverified { background: #2a1a1a; color: #e74c3c; }
+    .alert-summary { font-size: 13px; color: #aaa; margin-bottom: 8px; }
+    .alert-rationale { font-size: 12px; color: #666; font-style: italic; }
+    .alert-meta {
+      font-size: 11px;
+      color: #555;
+      margin-top: 8px;
+      display: flex;
+      gap: 16px;
+    }
+
+    /* ─── Event table ─── */
+    .event-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .event-table th {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid #1e1e2e;
+      color: #666;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .event-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #111118;
+      color: #aaa;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .event-table tr:hover td { background: #111118; color: #ddd; }
+
+    .pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-weight: 500;
+      display: inline-block;
+    }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    @media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
+
+    .empty { color: #444; font-size: 14px; text-align: center; padding: 40px; }
+    .loading { color: #666; text-align: center; padding: 60px; font-size: 14px; }
+
+    /* Actor/region pills */
+    .actor-list { display: flex; flex-wrap: wrap; gap: 8px; }
+    .actor-pill {
+      background: #111118;
+      border: 1px solid #1e1e2e;
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 13px;
+      color: #bbb;
+    }
+    .actor-pill .count { color: #666; margin-left: 6px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Horn Monitor <span>/ Admin</span></h1>
+    <div class="header-stats" id="headerStats">
+      <div>Loading...</div>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- Stats cards -->
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card"><div class="label">Loading...</div></div>
+    </div>
+
+    <!-- Alerts: severity 4-5 -->
+    <div class="section" id="alertSection">
+      <h2>High Severity Alerts (Last 7 Days)</h2>
+      <div class="alert-list" id="alertList">
+        <div class="loading">Loading alerts...</div>
+      </div>
+    </div>
+
+    <!-- Charts row -->
+    <div class="two-col">
+      <div class="section">
+        <h2>Events by Type</h2>
+        <div class="bar-chart" id="typeChart"></div>
+      </div>
+      <div class="section">
+        <h2>Severity Distribution</h2>
+        <div class="bar-chart" id="severityChart"></div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="section">
+        <h2>Top Actors</h2>
+        <div class="actor-list" id="actorList"></div>
+      </div>
+      <div class="section">
+        <h2>Regions</h2>
+        <div class="actor-list" id="regionList"></div>
+      </div>
+    </div>
+
+    <!-- Event log -->
+    <div class="section">
+      <h2>Recent Events</h2>
+      <div style="overflow-x:auto">
+        <table class="event-table" id="eventTable">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Type</th>
+              <th>Severity</th>
+              <th>Scope</th>
+              <th>Country</th>
+              <th>Regions</th>
+              <th>Summary</th>
+              <th>Verification</th>
+              <th>Sources</th>
+            </tr>
+          </thead>
+          <tbody id="eventBody">
+            <tr><td colspan="9" class="loading">Loading events...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TYPE_COLORS = {
+      security: '#e74c3c',
+      political: '#3498db',
+      economic: '#f39c12',
+      humanitarian: '#e67e22',
+      infrastructure: '#9b59b6',
+      legal: '#1abc9c',
+    };
+    const SEV_COLORS = { 1: '#2ecc71', 2: '#27ae60', 3: '#f39c12', 4: '#e74c3c', 5: '#c0392b' };
+    const SEV_LABELS = { 1: 'Routine', 2: 'Notable', 3: 'Significant', 4: 'Major', 5: 'Critical' };
+
+    async function load() {
+      const [eventsRes, alertsRes, actorsRes, regionsRes] = await Promise.all([
+        fetch('/api/admin/events').then(r => r.json()),
+        fetch('/api/admin/alerts').then(r => r.json()),
+        fetch('/api/admin/actors').then(r => r.json()),
+        fetch('/api/admin/regions').then(r => r.json()),
+      ]);
+
+      const { events, stats } = eventsRes;
+
+      if (!stats || stats.totalEvents === 0) {
+        document.getElementById('statsGrid').innerHTML =
+          '<div class="stat-card"><div class="label">No events yet</div><div class="sub">Load the news feed first to trigger extraction</div></div>';
+        return;
+      }
+
+      renderStats(stats);
+      renderTypeChart(stats.byType);
+      renderSeverityChart(stats.bySeverity);
+      renderAlerts(alertsRes.alerts);
+      renderActors(actorsRes.actors);
+      renderRegions(regionsRes.regions);
+      renderEvents(events);
+    }
+
+    function renderStats(stats) {
+      const missingPct = stats.totalEvents > 0
+        ? Math.round((stats.missingRegions / stats.totalEvents) * 100) : 0;
+
+      document.getElementById('headerStats').innerHTML = `
+        <div><span class="val">${stats.totalEvents}</span> Total Events</div>
+        <div><span class="val">${stats.lastWeek}</span> Last 7 Days</div>
+        <div><span class="val">${stats.avgConfidence || '—'}</span> Avg Confidence</div>
+      `;
+
+      document.getElementById('statsGrid').innerHTML = `
+        <div class="stat-card">
+          <div class="label">Total Events</div>
+          <div class="value">${stats.totalEvents}</div>
+          <div class="sub">${stats.lastWeek} in last 7 days</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Event Types</div>
+          <div class="value">${stats.byType.length}</div>
+          <div class="sub">of 6 possible categories</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Avg Confidence</div>
+          <div class="value">${stats.avgConfidence || '—'}</div>
+          <div class="sub">0.0 = low, 1.0 = definitive</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Countries</div>
+          <div class="value">${stats.byCountry.length}</div>
+          <div class="sub">${stats.byCountry.map(c => c.country).join(', ')}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Missing Regions</div>
+          <div class="value">${missingPct}%</div>
+          <div class="sub">${stats.missingRegions} of ${stats.totalEvents} events</div>
+        </div>
+      `;
+    }
+
+    function renderTypeChart(byType) {
+      const max = Math.max(...byType.map(t => t.count), 1);
+      document.getElementById('typeChart').innerHTML = byType.map(t => `
+        <div class="bar-row">
+          <div class="bar-label">${t.event_type}</div>
+          <div class="bar-track">
+            <div class="bar-fill" style="width:${(t.count/max)*100}%; background:${TYPE_COLORS[t.event_type] || '#666'}"></div>
+          </div>
+          <div class="bar-count">${t.count}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderSeverityChart(bySev) {
+      const max = Math.max(...bySev.map(s => s.count), 1);
+      document.getElementById('severityChart').innerHTML = bySev.map(s => `
+        <div class="bar-row">
+          <div class="bar-label">${s.severity} — ${SEV_LABELS[s.severity] || ''}</div>
+          <div class="bar-track">
+            <div class="bar-fill" style="width:${(s.count/max)*100}%; background:${SEV_COLORS[s.severity] || '#666'}"></div>
+          </div>
+          <div class="bar-count">${s.count}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderAlerts(alerts) {
+      const el = document.getElementById('alertList');
+      if (!alerts || alerts.length === 0) {
+        el.innerHTML = '<div class="empty">No high-severity events in the last 7 days</div>';
+        return;
+      }
+      el.innerHTML = alerts.map(a => {
+        const regions = safeParseJSON(a.regions);
+        const actors = safeParseJSON(a.actors);
+        const verClass = `badge-${a.verification_status || 'reported'}`;
+        return `
+          <div class="alert-card sev-${a.severity}">
+            <div class="alert-header">
+              <div class="alert-title">${esc(a.primary_title || a.summary)}</div>
+              <div class="alert-badges">
+                <span class="badge badge-severity">SEV ${a.severity}</span>
+                <span class="badge badge-type">${a.event_type}${a.event_subtype ? '/' + a.event_subtype : ''}</span>
+                <span class="badge badge-scope">${a.scope || '—'}</span>
+                <span class="badge ${verClass}">${a.verification_status || 'reported'}</span>
+              </div>
+            </div>
+            <div class="alert-summary">${esc(a.summary)}</div>
+            ${a.rationale ? `<div class="alert-rationale">"${esc(a.rationale)}"</div>` : ''}
+            <div class="alert-meta">
+              <span>${a.country}${regions.length ? ' / ' + regions.join(', ') : ''}</span>
+              <span>Actors: ${actors.length ? actors.join(', ') : '—'}</span>
+              <span>Confidence: ${a.confidence}</span>
+              <span>${formatDate(a.published_at)}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderActors(actors) {
+      const el = document.getElementById('actorList');
+      if (!actors || actors.length === 0) {
+        el.innerHTML = '<div class="empty">No actors extracted yet</div>';
+        return;
+      }
+      el.innerHTML = actors.slice(0, 15).map(a =>
+        `<div class="actor-pill">${esc(a.actor)}<span class="count">${a.count}</span></div>`
+      ).join('');
+    }
+
+    function renderRegions(regions) {
+      const el = document.getElementById('regionList');
+      if (!regions || regions.length === 0) {
+        el.innerHTML = '<div class="empty">No regions extracted yet</div>';
+        return;
+      }
+      el.innerHTML = regions.map(r =>
+        `<div class="actor-pill">${esc(r.region)}<span class="count">${r.count}</span></div>`
+      ).join('');
+    }
+
+    function renderEvents(events) {
+      const tbody = document.getElementById('eventBody');
+      if (!events || events.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty">No events yet</td></tr>';
+        return;
+      }
+      tbody.innerHTML = events.map(e => {
+        const regions = safeParseJSON(e.regions);
+        const sources = safeParseJSON(e.sources);
+        const sevColor = SEV_COLORS[e.severity] || '#666';
+        const typeColor = TYPE_COLORS[e.event_type] || '#666';
+        return `
+          <tr>
+            <td>${formatDate(e.published_at)}</td>
+            <td><span class="pill" style="background:${typeColor}22; color:${typeColor}">${e.event_type}${e.event_subtype ? '/' + e.event_subtype : ''}</span></td>
+            <td><span class="pill" style="background:${sevColor}22; color:${sevColor}">${e.severity} ${SEV_LABELS[e.severity] || ''}</span></td>
+            <td>${e.scope || '—'}</td>
+            <td>${esc(e.country)}</td>
+            <td>${regions.join(', ') || '—'}</td>
+            <td title="${esc(e.summary)}">${esc(truncate(e.summary, 80))}</td>
+            <td>${e.verification_status || '—'}</td>
+            <td>${sources.length} source${sources.length !== 1 ? 's' : ''}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Helpers
+    function safeParseJSON(s) { try { return JSON.parse(s || '[]'); } catch { return []; } }
+    function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : s || ''; }
+    function formatDate(d) {
+      if (!d) return '—';
+      try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+      catch { return d; }
+    }
+
+    load();
+  </script>
+</body>
+</html>
