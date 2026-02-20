@@ -14,7 +14,7 @@ const MAX_RETRIES = 3;
 // ─── Provenance ─────────────────────────────────────────────────
 
 const MODEL_VERSION = 'llama-3.3-70b-versatile';
-const PROMPT_VERSION = 'v2'; // bump when you change EXTRACTION_PROMPT
+const PROMPT_VERSION = 'v3'; // bump when you change EXTRACTION_PROMPT
 
 // ─── Validation enums ──────────────────────────────────────────
 
@@ -32,12 +32,19 @@ const ACTOR_ALIASES = {
   'government of south sudan': 'Government of South Sudan',
   'goss': 'Government of South Sudan',
   'south sudan government': 'Government of South Sudan',
+  'south sudanese government': 'Government of South Sudan',
   'govt of sudan': 'Government of Sudan',
   'government of sudan': 'Government of Sudan',
   'sudan government': 'Government of Sudan',
   'sudanese government': 'Government of Sudan',
   'saf': 'Sudan Armed Forces (SAF)',
   'sudan armed forces': 'Sudan Armed Forces (SAF)',
+
+  // United Nations — all forms → single canonical name
+  'un': 'United Nations',
+  'united nations': 'United Nations',
+  'the united nations': 'United Nations',
+  'the un': 'United Nations',
 
   // Known orgs — normalize to canonical form
   'splm-io': 'SPLM-IO',
@@ -50,6 +57,7 @@ const ACTOR_ALIASES = {
   'united nations mission in south sudan': 'UNMISS',
   'rsf': 'Rapid Support Forces (RSF)',
   'rapid support forces': 'Rapid Support Forces (RSF)',
+  'rapid support forces (rsf)': 'Rapid Support Forces (RSF)',
   'igad': 'IGAD',
   'intergovernmental authority on development': 'IGAD',
   'unhcr': 'UNHCR',
@@ -63,12 +71,18 @@ const ACTOR_ALIASES = {
   'au': 'African Union',
   'african union': 'African Union',
   'ocha': 'UN OCHA',
+  'un ocha': 'UN OCHA',
   'unicef': 'UNICEF',
   'iom': 'IOM',
   'international organization for migration': 'IOM',
   'msf': 'MSF',
   'doctors without borders': 'MSF',
   'médecins sans frontières': 'MSF',
+  'eu': 'European Union',
+  'european union': 'European Union',
+  'the european union': 'European Union',
+  'icj': 'International Commission of Jurists',
+  'international commission of jurists': 'International Commission of Jurists',
 };
 
 function normalizeActor(actor) {
@@ -228,7 +242,7 @@ Rules:
 - eventSubtype should be a short lowercase slug
 - confidence reflects how certain the extracted information is (0.5 = moderate, 0.8 = high, 1.0 = definitive)
 - verificationStatus: "confirmed" if multiple sources or official source, "reported" if credible single source, "unverified" if uncertain
-- rationale MUST explain the severity and verification choices — this is used for quality auditing
+- rationale must be ONE concise sentence: state the key fact justifying the severity, not how the scoring system works. Example: "UN fact-finding mission confirms RSF actions show hallmarks of genocide in El Fasher." Do NOT explain the scoring methodology.
 - Return ONLY the JSON object, nothing else`;
 
 async function extractEventData(cluster) {
