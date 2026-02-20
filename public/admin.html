@@ -277,6 +277,27 @@
     .missing-source-table th { text-align: left; color: #666; padding: 6px 8px; border-bottom: 1px solid #1e1e2e; font-size: 11px; text-transform: uppercase; }
     .missing-source-table td { padding: 6px 8px; color: #aaa; border-bottom: 1px solid #111118; }
     .missing-source-table .pct-bar { display: inline-block; height: 8px; border-radius: 4px; vertical-align: middle; margin-left: 6px; }
+
+    /* ─── Digest ─── */
+    .digest-topline { margin-bottom: 16px; }
+    .digest-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #111118; font-size: 13px; }
+    .digest-row .d-type { color: #bbb; }
+    .digest-row .d-nums { color: #888; }
+    .d-up { color: #e74c3c; font-weight: 600; }
+    .d-down { color: #2ecc71; font-weight: 600; }
+    .d-flat { color: #666; }
+    .digest-events { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+    .digest-ev {
+      background: #111118;
+      border-left: 3px solid #e74c3c;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 13px;
+    }
+    .digest-ev.dsev-5 { border-left-color: #c0392b; background: #130a0a; }
+    .digest-ev .dev-summary { color: #ddd; font-weight: 500; margin-bottom: 4px; }
+    .digest-ev .dev-meta { font-size: 11px; color: #777; }
+    .digest-ev .dev-rationale { font-size: 11px; color: #555; font-style: italic; margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -304,6 +325,17 @@
       <h2>High Severity Alerts (Last 7 Days)</h2>
       <div class="alert-list" id="alertList">
         <div class="loading">Loading alerts...</div>
+      </div>
+    </div>
+
+    <!-- Weekly Risk Delta -->
+    <div class="section" id="digestSection">
+      <h2>Weekly Risk Delta <span style="font-size:11px; color:#555; text-transform:none; letter-spacing:0">(auto-generated intelligence brief)</span></h2>
+      <div id="digestContent"><div class="loading">Loading digest...</div></div>
+      <div style="margin-top:12px; display:flex; gap:12px">
+        <a href="/api/admin/digest/html" target="_blank" style="font-size:12px; color:#3498db; text-decoration:none; padding:6px 14px; border:1px solid #1e1e2e; border-radius:6px; background:#111118">View Full HTML</a>
+        <a href="/api/admin/digest/text" target="_blank" style="font-size:12px; color:#3498db; text-decoration:none; padding:6px 14px; border:1px solid #1e1e2e; border-radius:6px; background:#111118">View Plain Text</a>
+        <a href="/api/admin/digest" target="_blank" style="font-size:12px; color:#3498db; text-decoration:none; padding:6px 14px; border:1px solid #1e1e2e; border-radius:6px; background:#111118">Raw JSON API</a>
       </div>
     </div>
 
@@ -369,12 +401,13 @@
     const SEV_LABELS = { 1: 'Routine', 2: 'Notable', 3: 'Significant', 4: 'Major', 5: 'Critical' };
 
     async function load() {
-      const [eventsRes, alertsRes, actorsRes, regionsRes, qualityRes] = await Promise.all([
+      const [eventsRes, alertsRes, actorsRes, regionsRes, qualityRes, digestRes] = await Promise.all([
         fetch('/api/admin/events').then(r => r.json()),
         fetch('/api/admin/alerts').then(r => r.json()),
         fetch('/api/admin/actors').then(r => r.json()),
         fetch('/api/admin/regions').then(r => r.json()),
         fetch('/api/admin/quality').then(r => r.json()),
+        fetch('/api/admin/digest').then(r => r.json()),
       ]);
 
       const { events, stats } = eventsRes;
@@ -383,11 +416,13 @@
         document.getElementById('statsGrid').innerHTML =
           '<div class="stat-card"><div class="label">No events yet</div><div class="sub">Load the news feed first to trigger extraction</div></div>';
         renderDataQuality(qualityRes);
+        renderDigest(digestRes);
         return;
       }
 
       renderStats(stats);
       renderDataQuality(qualityRes);
+      renderDigest(digestRes);
       renderTypeChart(stats.byType);
       renderSeverityChart(stats.bySeverity);
       renderAlerts(alertsRes.alerts);
@@ -542,6 +577,59 @@
           </tr>
         `;
       }).join('');
+    }
+
+    function renderDigest(d) {
+      const el = document.getElementById('digestContent');
+      if (!d || !d.topline) { el.innerHTML = '<div class="empty">No digest data yet</div>'; return; }
+
+      function fmtChange(pct) { return pct > 0 ? `+${pct}%` : pct < 0 ? `${pct}%` : 'unchanged'; }
+      function chgClass(pct) { return pct > 0 ? 'd-up' : pct < 0 ? 'd-down' : 'd-flat'; }
+
+      let html = `<div style="font-size:16px; color:#fff; font-weight:600; margin-bottom:4px">Week ${d.weekNumber} Risk Delta</div>`;
+      html += `<div style="font-size:12px; color:#555; margin-bottom:16px">${d.period.thisWeek}</div>`;
+
+      // Topline
+      html += '<div class="digest-topline">';
+      html += `<div class="digest-row" style="font-weight:600"><span class="d-type">Total Events</span><span class="d-nums">${d.topline.totalThisWeek} vs ${d.topline.totalLastWeek} <span class="${chgClass(d.topline.totalChange)}">${fmtChange(d.topline.totalChange)}</span></span></div>`;
+      for (const t of d.topline.typeShifts) {
+        html += `<div class="digest-row"><span class="d-type">${t.type}</span><span class="d-nums">${t.thisWeek} vs ${t.lastWeek} <span class="${chgClass(t.change)}">${fmtChange(t.change)}</span></span></div>`;
+      }
+      html += '</div>';
+
+      // High-sev events (inline, compact)
+      if (d.highSeverity.length > 0) {
+        html += '<div style="font-size:12px; color:#666; margin:12px 0 8px">High-Severity Events</div>';
+        html += '<div class="digest-events">';
+        for (const e of d.highSeverity.slice(0, 5)) {
+          const regions = Array.isArray(e.regions) ? e.regions : [];
+          html += `<div class="digest-ev ${e.severity >= 5 ? 'dsev-5' : ''}">`;
+          html += `<div class="dev-summary">${esc(e.summary)}</div>`;
+          html += `<div class="dev-meta"><span class="badge badge-sev">SEV ${e.severity}</span> ${e.eventType} | ${e.country}${regions.length ? ' / ' + regions.join(', ') : ''} | ${e.verificationStatus}</div>`;
+          if (e.rationale) html += `<div class="dev-rationale">"${esc(e.rationale)}"</div>`;
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+
+      // Hot regions (compact)
+      if (d.hotRegions.length > 0) {
+        html += '<div style="font-size:12px; color:#666; margin:16px 0 8px">Hot Regions</div>';
+        for (const r of d.hotRegions.slice(0, 6)) {
+          html += `<div class="digest-row"><span class="d-type">${esc(r.region)}</span><span class="d-nums">${r.count} events, avg sev ${r.avgSeverity} <span class="${chgClass(r.change)}">${fmtChange(r.change)} WoW</span></span></div>`;
+        }
+      }
+
+      // Actor spikes (compact)
+      const spikes = (d.actorSpikes || []).filter(a => a.change !== 0).slice(0, 6);
+      if (spikes.length > 0) {
+        html += '<div style="font-size:12px; color:#666; margin:16px 0 8px">Actor Spikes</div>';
+        for (const a of spikes) {
+          html += `<div class="digest-row"><span class="d-type">${esc(a.actor)}</span><span class="d-nums">${a.thisWeek} mentions <span class="${chgClass(a.change)}">${fmtChange(a.change)}</span></span></div>`;
+        }
+      }
+
+      el.innerHTML = html;
     }
 
     function renderDataQuality(q) {

@@ -95,11 +95,13 @@ const SOURCE_TIERS = {
   // Tier 1: Major international / official
   'BBC Africa': 'tier1',
   'Reuters': 'tier1',
+  'Reuters Sudan': 'tier1',
   'Al Jazeera': 'tier1',
   'The Guardian Africa': 'tier1',
   'France24 Africa': 'tier1',
   'UN News Africa': 'tier1',
   'VOA Africa': 'tier1',
+  'VOA Sudan': 'tier1',
 
   // Tier 2: Regional / established local
   'Radio Tamazuj': 'tier2',
@@ -111,6 +113,7 @@ const SOURCE_TIERS = {
   // Tier 3: Community / aggregated
   'Nyamilepedia': 'tier3',
   'Google News': 'tier3',
+  'Google News Sudan': 'tier3',
 };
 
 function initExtractor(apiKey) {
@@ -219,7 +222,9 @@ Severity scale:
 
 Rules:
 - country should be the PRIMARY country affected
-- regions should use standard admin names (South Sudan states: Upper Nile, Jonglei, Unity, Warrap, Northern Bahr el Ghazal, Western Bahr el Ghazal, Lakes, Western Equatoria, Central Equatoria, Eastern Equatoria)
+- regions should use standard admin names:
+  South Sudan states: Upper Nile, Jonglei, Unity, Warrap, Northern Bahr el Ghazal, Western Bahr el Ghazal, Lakes, Western Equatoria, Central Equatoria, Eastern Equatoria
+  Sudan states: Khartoum, North Darfur, South Darfur, West Darfur, Central Darfur, East Darfur, South Kordofan, North Kordofan, West Kordofan, Blue Nile, White Nile, Gezira, Sennar, Kassala, Gedaref, Red Sea, River Nile, Northern
 - eventSubtype should be a short lowercase slug
 - confidence reflects how certain the extracted information is (0.5 = moderate, 0.8 = high, 1.0 = definitive)
 - verificationStatus: "confirmed" if multiple sources or official source, "reported" if credible single source, "unverified" if uncertain
