@@ -4,6 +4,8 @@ const NodeCache = require('node-cache');
 const { fetchAllSources } = require('./fetcher');
 const { clusterArticles } = require('./cluster');
 const { initGroq, extractiveSummary, deepSummarizeCluster, answerFollowUp } = require('./summarizer');
+const { initDB, getEventStats } = require('./db');
+const { initExtractor, extractAllEvents } = require('./extractor');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
@@ -12,13 +14,16 @@ const PORT = process.env.PORT || 3000;
 
 // Cache: articles for 15 minutes, summaries for 30 minutes
 const cache = new NodeCache();
-const ARTICLES_TTL = 15 * 60;
 const CLUSTERS_TTL = 30 * 60;
 const DEEP_TTL = 60 * 60; // Deep summaries cached 1 hour
+
+// Initialize database (structured event storage)
+initDB();
 
 // Initialize Groq if API key is available (free tier)
 if (process.env.GROQ_API_KEY) {
   initGroq(process.env.GROQ_API_KEY);
+  initExtractor(process.env.GROQ_API_KEY);
   console.log('Groq AI summarization enabled');
 } else {
   console.log('No GROQ_API_KEY found — running without AI summaries (extractive fallback)');
@@ -66,6 +71,12 @@ app.get('/api/news', async (req, res) => {
 
     cache.set('clusters', response, CLUSTERS_TTL);
     res.json(response);
+
+    // Background: extract structured event data for all clusters
+    // This runs AFTER the response is sent — doesn't block the user
+    extractAllEvents(summarized).catch((err) => {
+      console.error('Background event extraction error:', err.message);
+    });
   } catch (err) {
     console.error('Error in /api/news:', err);
     res.status(500).json({ error: 'Failed to fetch news' });
@@ -140,12 +151,13 @@ app.post('/api/news/refresh', async (req, res) => {
   res.json({ message: 'Cache cleared. Next request will fetch fresh data.' });
 });
 
-// API: Health check
+// API: Health check + event stats
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     aiEnabled: !!process.env.GROQ_API_KEY,
     cacheStats: cache.getStats(),
+    eventStats: getEventStats(),
   });
 });
 
