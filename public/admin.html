@@ -209,6 +209,74 @@
       color: #bbb;
     }
     .actor-pill .count { color: #666; margin-left: 6px; font-weight: 600; }
+
+    /* ─── Data Quality ─── */
+    .quality-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .quality-card {
+      background: #111118;
+      border: 1px solid #1e1e2e;
+      border-radius: 8px;
+      padding: 14px;
+      text-align: center;
+    }
+    .quality-card .q-val { font-size: 24px; font-weight: 700; color: #fff; }
+    .quality-card .q-label { font-size: 11px; color: #666; text-transform: uppercase; margin-top: 2px; }
+    .quality-card.good .q-val { color: #2ecc71; }
+    .quality-card.warn .q-val { color: #f39c12; }
+    .quality-card.bad .q-val { color: #e74c3c; }
+
+    .confidence-trend {
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      height: 60px;
+      margin-top: 12px;
+    }
+    .trend-bar {
+      flex: 1;
+      background: #3498db;
+      border-radius: 2px 2px 0 0;
+      position: relative;
+      min-height: 2px;
+    }
+    .trend-bar .trend-label {
+      position: absolute;
+      top: -18px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      color: #888;
+      white-space: nowrap;
+    }
+
+    .quarantine-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .quarantine-item {
+      background: #111118;
+      border: 1px solid #1e1e2e;
+      border-left: 3px solid #f39c12;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+    }
+    .quarantine-item .q-title { color: #ccc; font-weight: 500; margin-bottom: 4px; }
+    .quarantine-item .q-reasons { color: #888; }
+    .quarantine-item .q-date { color: #555; font-size: 11px; margin-top: 4px; }
+
+    .missing-source-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+    .missing-source-table th { text-align: left; color: #666; padding: 6px 8px; border-bottom: 1px solid #1e1e2e; font-size: 11px; text-transform: uppercase; }
+    .missing-source-table td { padding: 6px 8px; color: #aaa; border-bottom: 1px solid #111118; }
+    .missing-source-table .pct-bar { display: inline-block; height: 8px; border-radius: 4px; vertical-align: middle; margin-left: 6px; }
   </style>
 </head>
 <body>
@@ -223,6 +291,12 @@
     <!-- Stats cards -->
     <div class="stats-grid" id="statsGrid">
       <div class="stat-card"><div class="label">Loading...</div></div>
+    </div>
+
+    <!-- Data Quality -->
+    <div class="section" id="qualitySection">
+      <h2>Data Quality</h2>
+      <div id="qualityContent"><div class="loading">Loading quality metrics...</div></div>
     </div>
 
     <!-- Alerts: severity 4-5 -->
@@ -295,11 +369,12 @@
     const SEV_LABELS = { 1: 'Routine', 2: 'Notable', 3: 'Significant', 4: 'Major', 5: 'Critical' };
 
     async function load() {
-      const [eventsRes, alertsRes, actorsRes, regionsRes] = await Promise.all([
+      const [eventsRes, alertsRes, actorsRes, regionsRes, qualityRes] = await Promise.all([
         fetch('/api/admin/events').then(r => r.json()),
         fetch('/api/admin/alerts').then(r => r.json()),
         fetch('/api/admin/actors').then(r => r.json()),
         fetch('/api/admin/regions').then(r => r.json()),
+        fetch('/api/admin/quality').then(r => r.json()),
       ]);
 
       const { events, stats } = eventsRes;
@@ -307,10 +382,12 @@
       if (!stats || stats.totalEvents === 0) {
         document.getElementById('statsGrid').innerHTML =
           '<div class="stat-card"><div class="label">No events yet</div><div class="sub">Load the news feed first to trigger extraction</div></div>';
+        renderDataQuality(qualityRes);
         return;
       }
 
       renderStats(stats);
+      renderDataQuality(qualityRes);
       renderTypeChart(stats.byType);
       renderSeverityChart(stats.bySeverity);
       renderAlerts(alertsRes.alerts);
@@ -465,6 +542,96 @@
           </tr>
         `;
       }).join('');
+    }
+
+    function renderDataQuality(q) {
+      const el = document.getElementById('qualityContent');
+      if (!q) { el.innerHTML = '<div class="empty">No quality data</div>'; return; }
+
+      const acceptClass = q.acceptRate >= 90 ? 'good' : q.acceptRate >= 70 ? 'warn' : 'bad';
+
+      let html = `
+        <div class="quality-grid">
+          <div class="quality-card ${acceptClass}">
+            <div class="q-val">${q.acceptRate}%</div>
+            <div class="q-label">Accept Rate</div>
+          </div>
+          <div class="quality-card">
+            <div class="q-val">${q.events.total}</div>
+            <div class="q-label">Events Stored</div>
+          </div>
+          <div class="quality-card">
+            <div class="q-val">${q.events.last24h}</div>
+            <div class="q-label">Events (24h)</div>
+          </div>
+          <div class="quality-card ${q.quarantine.total > 0 ? 'warn' : 'good'}">
+            <div class="q-val">${q.quarantine.total}</div>
+            <div class="q-label">Quarantined</div>
+          </div>
+          <div class="quality-card">
+            <div class="q-val">${q.quarantine.last24h}</div>
+            <div class="q-label">Quarantined (24h)</div>
+          </div>
+          <div class="quality-card">
+            <div class="q-val">${q.quarantine.last7d}</div>
+            <div class="q-label">Quarantined (7d)</div>
+          </div>
+        </div>
+      `;
+
+      // Confidence trend
+      if (q.confidenceTrend && q.confidenceTrend.length > 0) {
+        const maxConf = 1.0;
+        html += '<div style="font-size:12px; color:#666; margin-bottom:4px">Confidence Trend (7 days)</div>';
+        html += '<div class="confidence-trend">';
+        for (const day of q.confidenceTrend) {
+          const pct = (day.avg_confidence / maxConf) * 100;
+          html += `<div class="trend-bar" style="height:${pct}%" title="${day.day}: ${day.avg_confidence} (${day.count} events)">
+            <span class="trend-label">${day.avg_confidence}</span>
+          </div>`;
+        }
+        html += '</div>';
+      }
+
+      // Two columns: missing by source + recent quarantine
+      html += '<div class="two-col" style="margin-top:20px">';
+
+      // Missing regions by source
+      if (q.missingBySource && q.missingBySource.length > 0) {
+        html += '<div>';
+        html += '<div style="font-size:12px; color:#666; margin-bottom:8px">Missing Regions by Source</div>';
+        html += '<table class="missing-source-table"><thead><tr><th>Source</th><th>Total</th><th>Missing</th><th>%</th></tr></thead><tbody>';
+        for (const s of q.missingBySource) {
+          const pct = s.total > 0 ? Math.round((s.missing / s.total) * 100) : 0;
+          const color = pct > 50 ? '#e74c3c' : pct > 20 ? '#f39c12' : '#2ecc71';
+          html += `<tr>
+            <td>${esc(s.source_name)}</td>
+            <td>${s.total}</td>
+            <td>${s.missing}</td>
+            <td>${pct}% <span class="pct-bar" style="width:${pct}px; background:${color}"></span></td>
+          </tr>`;
+        }
+        html += '</tbody></table></div>';
+      }
+
+      // Recent quarantine
+      if (q.recentQuarantine && q.recentQuarantine.length > 0) {
+        html += '<div>';
+        html += '<div style="font-size:12px; color:#666; margin-bottom:8px">Recent Quarantined</div>';
+        html += '<div class="quarantine-list">';
+        for (const item of q.recentQuarantine) {
+          const reasons = safeParseJSON(item.error_reasons);
+          html += `<div class="quarantine-item">
+            <div class="q-title">${esc(truncate(item.primary_title, 60))}</div>
+            <div class="q-reasons">${reasons.join(', ')}</div>
+            <div class="q-date">${formatDate(item.quarantined_at)}</div>
+          </div>`;
+        }
+        html += '</div></div>';
+      }
+
+      html += '</div>';
+      el.innerHTML = html;
     }
 
     // Helpers

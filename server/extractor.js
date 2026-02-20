@@ -1,14 +1,20 @@
 // Structured event extraction — runs in background after feed loads.
 // Every cluster gets tagged with: eventType, subtype, severity, scope,
 // verificationStatus, confidence, actors, country, regions, rationale.
+// Failed/borderline extractions go to quarantine for learning.
 // Results persist to SQLite. The front-end doesn't change.
 
 const Groq = require('groq-sdk');
-const { clusterHash, eventExists, insertEvent } = require('./db');
+const { clusterHash, eventExists, insertEvent, insertQuarantine } = require('./db');
 
 let groqClient = null;
 const REQUEST_DELAY_MS = 3000;
 const MAX_RETRIES = 3;
+
+// ─── Provenance ─────────────────────────────────────────────────
+
+const MODEL_VERSION = 'llama-3.3-70b-versatile';
+const PROMPT_VERSION = 'v2'; // bump when you change EXTRACTION_PROMPT
 
 // ─── Validation enums ──────────────────────────────────────────
 
@@ -17,6 +23,72 @@ const VALID_EVENT_TYPES = new Set([
 ]);
 const VALID_SCOPES = new Set(['local', 'state', 'national', 'cross_border']);
 const VALID_VERIFICATION = new Set(['confirmed', 'reported', 'unverified']);
+
+// ─── Actor normalization ────────────────────────────────────────
+
+const ACTOR_ALIASES = {
+  // Government variations
+  'govt of south sudan': 'Government of South Sudan',
+  'government of south sudan': 'Government of South Sudan',
+  'goss': 'Government of South Sudan',
+  'south sudan government': 'Government of South Sudan',
+  'govt of sudan': 'Government of Sudan',
+  'government of sudan': 'Government of Sudan',
+  'sudan government': 'Government of Sudan',
+  'sudanese government': 'Government of Sudan',
+  'saf': 'Sudan Armed Forces (SAF)',
+  'sudan armed forces': 'Sudan Armed Forces (SAF)',
+
+  // Known orgs — normalize to canonical form
+  'splm-io': 'SPLM-IO',
+  'splm/a-io': 'SPLM-IO',
+  'splm - io': 'SPLM-IO',
+  'splm/spla-io': 'SPLM-IO',
+  'splm': 'SPLM',
+  'unmiss': 'UNMISS',
+  'un mission in south sudan': 'UNMISS',
+  'united nations mission in south sudan': 'UNMISS',
+  'rsf': 'Rapid Support Forces (RSF)',
+  'rapid support forces': 'Rapid Support Forces (RSF)',
+  'igad': 'IGAD',
+  'intergovernmental authority on development': 'IGAD',
+  'unhcr': 'UNHCR',
+  'un refugee agency': 'UNHCR',
+  'wfp': 'WFP',
+  'world food programme': 'WFP',
+  'world food program': 'WFP',
+  'icrc': 'ICRC',
+  'international committee of the red cross': 'ICRC',
+  'red cross': 'ICRC',
+  'au': 'African Union',
+  'african union': 'African Union',
+  'ocha': 'UN OCHA',
+  'unicef': 'UNICEF',
+  'iom': 'IOM',
+  'international organization for migration': 'IOM',
+  'msf': 'MSF',
+  'doctors without borders': 'MSF',
+  'médecins sans frontières': 'MSF',
+};
+
+function normalizeActor(actor) {
+  const key = actor.toLowerCase().trim();
+  return ACTOR_ALIASES[key] || actor.trim();
+}
+
+function normalizeActors(actors) {
+  if (!Array.isArray(actors)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const actor of actors) {
+    const normalized = normalizeActor(actor);
+    if (normalized && !seen.has(normalized.toLowerCase())) {
+      seen.add(normalized.toLowerCase());
+      result.push(normalized);
+    }
+  }
+  return result;
+}
 
 // Source tier mapping (deterministic — no AI needed)
 const SOURCE_TIERS = {
@@ -78,40 +150,43 @@ function getSourceTier(sources) {
 }
 
 // ─── Validation ─────────────────────────────────────────────────
+// Returns { hardErrors: [...], softErrors: [...] }
+// Hard errors = invalid schema (reject entirely)
+// Soft errors = borderline quality (quarantine, don't insert)
 
 function validateExtraction(data) {
-  const errors = [];
+  const hardErrors = [];
+  const softErrors = [];
 
+  // Hard: schema violations
   if (!data.country || typeof data.country !== 'string') {
-    errors.push('missing country');
+    hardErrors.push('missing country');
   }
-
   if (!data.eventType || !VALID_EVENT_TYPES.has(data.eventType)) {
-    errors.push(`invalid eventType: ${data.eventType}`);
+    hardErrors.push(`invalid eventType: ${data.eventType}`);
   }
-
   if (data.severity == null || data.severity < 1 || data.severity > 5) {
-    errors.push(`invalid severity: ${data.severity}`);
+    hardErrors.push(`invalid severity: ${data.severity}`);
   }
-
   if (data.scope && !VALID_SCOPES.has(data.scope)) {
-    errors.push(`invalid scope: ${data.scope}`);
+    hardErrors.push(`invalid scope: ${data.scope}`);
   }
-
   if (data.verificationStatus && !VALID_VERIFICATION.has(data.verificationStatus)) {
-    errors.push(`invalid verificationStatus: ${data.verificationStatus}`);
+    hardErrors.push(`invalid verificationStatus: ${data.verificationStatus}`);
   }
-
   if (data.confidence != null && (data.confidence < 0 || data.confidence > 1)) {
-    errors.push(`invalid confidence: ${data.confidence}`);
+    hardErrors.push(`invalid confidence: ${data.confidence}`);
   }
 
-  // Reject low-confidence extractions entirely
+  // Soft: borderline quality
   if (data.confidence != null && data.confidence < 0.3) {
-    errors.push(`confidence too low: ${data.confidence}`);
+    softErrors.push(`confidence too low: ${data.confidence}`);
+  }
+  if (!data.regions || (Array.isArray(data.regions) && data.regions.length === 0)) {
+    softErrors.push('missing regions');
   }
 
-  return errors;
+  return { hardErrors, softErrors };
 }
 
 // ─── Extraction prompt ──────────────────────────────────────────
@@ -155,7 +230,11 @@ async function extractEventData(cluster) {
   if (!groqClient) return null;
 
   const hash = clusterHash(cluster);
-  if (eventExists(hash)) return null; // Already extracted
+  if (eventExists(hash)) return null; // Already extracted or quarantined
+
+  const sources = [...new Set(cluster.articles.map((a) => a.source))];
+  const articleUrls = cluster.articles.map((a) => a.url).filter(Boolean);
+  let rawOutput = null;
 
   try {
     const articlesText = cluster.articles
@@ -164,7 +243,7 @@ async function extractEventData(cluster) {
       .join('\n\n');
 
     const response = await callGroqWithRetry({
-      model: 'llama-3.3-70b-versatile',
+      model: MODEL_VERSION,
       messages: [
         { role: 'system', content: EXTRACTION_PROMPT },
         { role: 'user', content: `Extract structured event data from these articles:\n\n${articlesText}` },
@@ -173,22 +252,52 @@ async function extractEventData(cluster) {
       temperature: 0.1,
     });
 
-    const raw = response.choices[0]?.message?.content?.trim();
-    if (!raw) return null;
+    rawOutput = response.choices[0]?.message?.content?.trim();
+    if (!rawOutput) return null;
 
     // Parse JSON (strip any markdown fencing the model might add)
-    const jsonStr = raw.replace(/^```json?\n?/i, '').replace(/\n?```$/i, '').trim();
+    const jsonStr = rawOutput.replace(/^```json?\n?/i, '').replace(/\n?```$/i, '').trim();
     const data = JSON.parse(jsonStr);
 
     // ── Validate ──────────────────────────────────────────────
-    const errors = validateExtraction(data);
-    if (errors.length > 0) {
-      console.warn(`  Validation failed for "${cluster.primaryArticle.title.slice(0, 40)}...": ${errors.join(', ')}`);
+    const { hardErrors, softErrors } = validateExtraction(data);
+
+    // Hard errors: reject and quarantine
+    if (hardErrors.length > 0) {
+      console.warn(`  Rejected "${cluster.primaryArticle.title.slice(0, 40)}...": ${hardErrors.join(', ')}`);
+      insertQuarantine({
+        cluster_hash: hash,
+        raw_output: rawOutput,
+        error_reasons: hardErrors,
+        primary_title: cluster.primaryArticle.title,
+        primary_url: cluster.primaryArticle.url,
+        sources,
+        article_urls: articleUrls,
+        model_version: MODEL_VERSION,
+        prompt_version: PROMPT_VERSION,
+      });
       return null;
     }
 
-    // Build event record
-    const sources = [...new Set(cluster.articles.map((a) => a.source))];
+    // Soft errors with low confidence: quarantine instead of insert
+    if (softErrors.length > 0 && data.confidence != null && data.confidence < 0.3) {
+      console.warn(`  Quarantined "${cluster.primaryArticle.title.slice(0, 40)}...": ${softErrors.join(', ')}`);
+      insertQuarantine({
+        cluster_hash: hash,
+        raw_output: rawOutput,
+        error_reasons: softErrors,
+        primary_title: cluster.primaryArticle.title,
+        primary_url: cluster.primaryArticle.url,
+        sources,
+        article_urls: articleUrls,
+        model_version: MODEL_VERSION,
+        prompt_version: PROMPT_VERSION,
+      });
+      return null;
+    }
+
+    // Build event record with provenance + normalized actors
+    const rawActors = data.actors || [];
     const event = {
       cluster_hash: hash,
       summary: data.summary || cluster.primaryArticle.title,
@@ -202,7 +311,11 @@ async function extractEventData(cluster) {
       verification_status: VALID_VERIFICATION.has(data.verificationStatus) ? data.verificationStatus : 'reported',
       confidence: Math.min(1, Math.max(0, data.confidence || 0.5)),
       rationale: data.rationale || null,
-      actors: data.actors || [],
+      actors: rawActors,
+      actors_normalized: normalizeActors(rawActors),
+      model_version: MODEL_VERSION,
+      prompt_version: PROMPT_VERSION,
+      article_urls: articleUrls,
       article_count: cluster.articles.length,
       sources,
       primary_url: cluster.primaryArticle.url,
@@ -213,7 +326,19 @@ async function extractEventData(cluster) {
     insertEvent(event);
     return event;
   } catch (err) {
+    // JSON parse failures or API errors: quarantine with raw output
     console.warn(`  Event extraction failed for "${cluster.primaryArticle.title.slice(0, 50)}...": ${err.message}`);
+    insertQuarantine({
+      cluster_hash: hash,
+      raw_output: rawOutput,
+      error_reasons: [err.message],
+      primary_title: cluster.primaryArticle.title,
+      primary_url: cluster.primaryArticle.url,
+      sources,
+      article_urls: articleUrls,
+      model_version: MODEL_VERSION,
+      prompt_version: PROMPT_VERSION,
+    });
     return null;
   }
 }
@@ -234,21 +359,21 @@ async function extractAllEvents(clusters) {
   console.log(`Extracting structured events for ${pending.length} new clusters (background)...`);
 
   let extracted = 0;
-  let failed = 0;
+  let quarantined = 0;
 
   for (const cluster of pending) {
     const result = await extractEventData(cluster);
     if (result) {
       extracted++;
     } else {
-      failed++;
+      quarantined++;
     }
 
     // Rate limit pacing
     await sleep(REQUEST_DELAY_MS);
   }
 
-  console.log(`Event extraction complete: ${extracted} extracted, ${failed} skipped/failed`);
+  console.log(`Event extraction complete: ${extracted} extracted, ${quarantined} skipped/quarantined`);
 }
 
 module.exports = { initExtractor, extractAllEvents, getSourceTier };
