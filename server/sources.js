@@ -40,9 +40,15 @@ const sources = [
   },
   {
     name: 'ReliefWeb',
-    url: 'https://reliefweb.int/updates/rss.xml?advanced-search=%28C219%29',
+    url: 'https://reliefweb.int/updates/rss.xml?search=%22south+sudan%22',
     category: 'humanitarian',
     reliability: 'high',
+  },
+  {
+    name: 'Eye Radio',
+    url: 'https://eyeradio.org/feed/',
+    category: 'local',
+    reliability: 'medium',
   },
 
   // ─── Google News (broad discovery, no images but wide coverage) ───────────
