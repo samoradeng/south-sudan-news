@@ -394,53 +394,96 @@ function generateDigest() {
 
 const SEV_LABELS = { 1: 'Routine', 2: 'Notable', 3: 'Significant', 4: 'Major', 5: 'Critical' };
 
+// Muted institutional color ladder — no bright reds, no alarm theater
+const SEV_COLORS = {
+  5: { badge: '#7A1F1F', badgeText: '#D4A0A0', border: '#4A1515' },  // deep burgundy / oxblood
+  4: { badge: '#5C3A10', badgeText: '#D4B07A', border: '#3D2808' },  // burnt amber
+  3: { badge: '#2A3A4A', badgeText: '#8AAAC0', border: '#1E2A38' },  // slate blue-gray
+  2: { badge: '#2A2A2E', badgeText: '#8A8A90', border: '#1E1E22' },  // neutral gray
+  1: { badge: '#222226', badgeText: '#6A6A70', border: '#1A1A1E' },  // light gray
+};
+
 function renderDigestHTML(digest) {
   const d = digest;
   const bw = d.topline.baselineWeak;
 
   let html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><style>
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d0d12; color: #d0d0d0; max-width: 680px; margin: 0 auto; padding: 32px 24px; line-height: 1.6; }
-h1 { font-size: 20px; color: #fff; margin-bottom: 4px; }
-.subtitle { color: #666; font-size: 13px; margin-bottom: 32px; }
-.baseline-note { color: #886; font-size: 12px; font-style: italic; margin-bottom: 16px; }
-h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; margin: 28px 0 14px 0; padding-bottom: 6px; border-bottom: 1px solid #1a1a2a; }
-.topline-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #111118; font-size: 14px; }
-.topline-type { color: #bbb; }
-.topline-nums { color: #888; font-size: 13px; }
-.change-up { color: #e74c3c; font-weight: 600; }
-.change-down { color: #2ecc71; font-weight: 600; }
-.change-flat { color: #666; }
-.change-new { color: #f39c12; font-weight: 600; }
-.event-card { background: #111118; border-left: 4px solid #e74c3c; border-radius: 6px; padding: 14px 18px; margin-bottom: 12px; }
-.event-card.sev-5 { border-left-color: #c0392b; background: #130a0a; }
-.event-card .ev-summary { font-size: 14px; color: #ddd; font-weight: 500; margin-bottom: 6px; }
-.event-card .ev-meta { font-size: 12px; color: #777; }
-.event-card .ev-rationale { font-size: 12px; color: #999; margin-top: 6px; }
-.event-card .ev-sources { font-size: 11px; color: #555; margin-top: 4px; }
-.region-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #111118; font-size: 13px; }
-.actor-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #111118; font-size: 13px; }
-.badge { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 4px; margin-right: 6px; }
-.badge-sev { background: #3a1a1a; color: #e74c3c; }
-.badge-type { background: #1a1a2e; color: #3498db; }
-.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #1a1a2a; font-size: 11px; color: #555; }
-a { color: #3498db; text-decoration: none; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0C0C10; color: #C8C8CC; max-width: 660px; margin: 0 auto; padding: 40px 28px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+
+/* Document header — feels like a memo, not a UI label */
+.doc-header { margin-bottom: 36px; padding-bottom: 20px; border-bottom: 1px solid #1C1C24; }
+.doc-title { font-size: 18px; font-weight: 600; color: #E8E8EC; letter-spacing: -0.3px; margin: 0 0 6px 0; }
+.doc-subtitle { font-size: 12px; color: #5A5A64; letter-spacing: 0.2px; margin: 0; }
+
+/* Section headers — quiet authority */
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #6A6A74; font-weight: 600; margin: 32px 0 16px 0; padding-bottom: 8px; border-bottom: 1px solid #18181E; }
+
+/* Baseline notice */
+.baseline-note { color: #7A7A60; font-size: 11px; letter-spacing: 0.2px; margin-bottom: 14px; padding: 8px 12px; background: #12120E; border-radius: 4px; }
+
+/* Topline rows */
+.topline-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid #14141A; font-size: 13px; }
+.topline-type { color: #A0A0A8; font-weight: 500; }
+.topline-nums { color: #6A6A74; font-size: 12px; }
+.change-up { color: #C07A5A; font-weight: 600; }
+.change-down { color: #5A9A6A; font-weight: 600; }
+.change-flat { color: #4A4A54; }
+.change-new { color: #9A8A5A; font-weight: 500; }
+
+/* Event cards — no red stripe, composed neutral */
+.event-card { background: #111116; border: 1px solid #1C1C24; border-radius: 6px; padding: 18px 20px; margin-bottom: 14px; }
+
+/* Summary headline */
+.event-card .ev-summary { font-size: 14px; color: #D8D8DC; font-weight: 500; line-height: 1.5; margin: 0 0 12px 0; }
+
+/* Stacked metadata — breathable hierarchy */
+.ev-meta-stack { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
+.badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 3px; letter-spacing: 0.5px; text-transform: uppercase; }
+.ev-location { font-size: 12px; color: #7A7A84; }
+.ev-verification { font-size: 11px; color: #5A5A64; }
+.ev-source-link { font-size: 11px; }
+
+/* Source count line */
+.ev-sources { font-size: 11px; color: #4A4A54; margin-top: 8px; letter-spacing: 0.1px; }
+
+/* Rationale — footnote energy */
+.ev-rationale { font-size: 11px; color: #5A5A60; margin-top: 6px; line-height: 1.5; }
+
+/* Hot Regions */
+.region-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid #14141A; font-size: 13px; }
+
+/* Actor Activity */
+.actor-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #14141A; font-size: 13px; }
+.actor-row.top-actor .actor-name { color: #D0D0D4; font-weight: 500; }
+.actor-row .actor-name { color: #9A9AA0; }
+.actor-row .actor-count { color: #5A5A64; font-size: 12px; }
+.actor-bar { display: inline-block; height: 3px; background: #2A2A34; border-radius: 2px; margin-left: 8px; vertical-align: middle; }
+
+/* Footer */
+.footer { margin-top: 44px; padding-top: 16px; border-top: 1px solid #18181E; font-size: 10px; color: #3A3A44; letter-spacing: 0.2px; line-height: 1.6; }
+a { color: #6A8AAA; text-decoration: none; }
+a:hover { color: #8AAAC0; }
 </style></head><body>`;
 
-  html += `<h1>Horn Risk Delta — Week ${d.weekNumber}</h1>`;
-  html += `<div class="subtitle">${d.period.thisWeek} | Generated ${new Date(d.generatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>`;
+  // Document header
+  html += '<div class="doc-header">';
+  html += `<p class="doc-title">Horn Risk Delta — Week ${d.weekNumber}</p>`;
+  html += `<p class="doc-subtitle">${d.period.thisWeek} &middot; Generated ${new Date(d.generatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>`;
+  html += '</div>';
 
   // Section 1: Topline
   html += '<h2>Topline</h2>';
   if (bw) {
-    html += '<div class="baseline-note">Baseline week — insufficient prior data for trend comparison. Raw counts shown.</div>';
+    html += '<div class="baseline-note">Baseline week — prior data insufficient for trend comparison. Raw counts shown.</div>';
   }
 
   if (bw) {
     html += `<div class="topline-row"><span class="topline-type" style="font-weight:600">Total Events</span><span class="topline-nums">${d.topline.totalThisWeek} events tracked</span></div>`;
   } else {
-    const totalChangeClass = d.topline.totalChange > 0 ? 'change-up' : d.topline.totalChange < 0 ? 'change-down' : 'change-flat';
-    html += `<div class="topline-row"><span class="topline-type" style="font-weight:600">Total Events</span><span class="topline-nums">${d.topline.totalThisWeek} vs ${d.topline.totalLastWeek} <span class="${totalChangeClass}">${formatChange(d.topline.totalChange, bw)}</span></span></div>`;
+    const totalCls = d.topline.totalChange > 0 ? 'change-up' : d.topline.totalChange < 0 ? 'change-down' : 'change-flat';
+    html += `<div class="topline-row"><span class="topline-type" style="font-weight:600">Total Events</span><span class="topline-nums">${d.topline.totalThisWeek} vs ${d.topline.totalLastWeek} <span class="${totalCls}">${formatChange(d.topline.totalChange, bw)}</span></span></div>`;
   }
 
   for (const t of d.topline.typeShifts) {
@@ -452,40 +495,46 @@ a { color: #3498db; text-decoration: none; }
     }
   }
 
-  // Section 2: High-Severity Events (bundled)
+  // Section 2: High-Severity Events
   html += '<h2>High-Severity Events</h2>';
   if (d.highSeverity.length === 0) {
-    html += '<div style="color:#555; font-size:13px; padding:12px 0">No severity 4-5 events this week.</div>';
+    html += '<div style="color:#4A4A54; font-size:12px; padding:12px 0">No severity 4-5 events this period.</div>';
   }
   for (const e of d.highSeverity) {
-    const sevClass = e.severity >= 5 ? 'sev-5' : '';
-    html += `<div class="event-card ${sevClass}">`;
+    const sev = SEV_COLORS[e.severity] || SEV_COLORS[3];
+    html += `<div class="event-card" style="border-color:${sev.border}">`;
     html += `<div class="ev-summary">${escHTML(e.summary)}</div>`;
-    html += `<div class="ev-meta">`;
-    html += `<span class="badge badge-sev">${SEV_LABELS[e.severity] || 'SEV ' + e.severity}</span>`;
-    html += `<span class="badge badge-type">${e.eventType}${e.eventSubtype ? '/' + e.eventSubtype : ''}</span>`;
-    html += `${e.country}${e.regions.length ? ' / ' + collapseRegions(e.regions).join(', ') : ''} `;
-    html += `| ${e.verificationStatus}`;
-    if (e.primaryUrl) html += ` | <a href="${escHTML(e.primaryUrl)}">source</a>`;
+
+    // Stacked meta — severity badge, type badge, location, verification
+    html += '<div class="ev-meta-stack">';
+    html += `<span class="badge" style="background:${sev.badge};color:${sev.badgeText}">${SEV_LABELS[e.severity] || 'SEV ' + e.severity}</span>`;
+    html += `<span class="badge" style="background:#1A1A2A;color:#7A8AAA">${e.eventType}${e.eventSubtype ? ' / ' + e.eventSubtype : ''}</span>`;
+    const regionDisplay = e.regions.length ? collapseRegions(e.regions).join(', ') : '';
+    html += `<span class="ev-location">${e.country}${regionDisplay ? ' — ' + regionDisplay : ''}</span>`;
+    html += `<span class="ev-verification">${e.verificationStatus}</span>`;
+    if (e.primaryUrl) html += `<span class="ev-source-link"><a href="${escHTML(e.primaryUrl)}">source</a></span>`;
     html += '</div>';
+
     if (e.sourceCount > 1) {
       html += `<div class="ev-sources">${e.sourceCount} articles across ${e.sources.length} sources: ${e.sources.join(', ')}</div>`;
     }
-    if (e.rationale) html += `<div class="ev-rationale">${escHTML(e.rationale)}</div>`;
+    if (e.rationale) {
+      html += `<div class="ev-rationale">${escHTML(e.rationale)}</div>`;
+    }
     html += '</div>';
   }
 
   // Section 3: Hot Regions
   html += '<h2>Hot Regions</h2>';
   if (d.hotRegions.length === 0) {
-    html += '<div style="color:#555; font-size:13px; padding:12px 0">No regional data this week.</div>';
+    html += '<div style="color:#4A4A54; font-size:12px; padding:12px 0">No regional data this period.</div>';
   }
   for (const r of d.hotRegions) {
     if (bw) {
-      html += `<div class="region-row"><span style="color:#bbb">${escHTML(r.region)}</span><span style="color:#888">${r.count} events (avg sev ${r.avgSeverity})</span></div>`;
+      html += `<div class="region-row"><span style="color:#A0A0A8">${escHTML(r.region)}</span><span style="color:#6A6A74;font-size:12px">${r.count} events (avg sev ${r.avgSeverity})</span></div>`;
     } else {
       const cls = r.change > 0 ? 'change-up' : r.change < 0 ? 'change-down' : 'change-flat';
-      html += `<div class="region-row"><span style="color:#bbb">${escHTML(r.region)}</span><span style="color:#888">${r.count} events (avg sev ${r.avgSeverity}) <span class="${cls}">${formatChange(r.change, bw)} WoW</span></span></div>`;
+      html += `<div class="region-row"><span style="color:#A0A0A8">${escHTML(r.region)}</span><span style="color:#6A6A74;font-size:12px">${r.count} events (avg sev ${r.avgSeverity}) <span class="${cls}">${formatChange(r.change, bw)} WoW</span></span></div>`;
     }
   }
 
@@ -493,23 +542,27 @@ a { color: #3498db; text-decoration: none; }
   html += '<h2>Actor Activity</h2>';
   const spikes = d.actorSpikes.filter((a) => a.change !== 0).slice(0, 10);
   if (spikes.length === 0) {
-    html += '<div style="color:#555; font-size:13px; padding:12px 0">No significant actor changes.</div>';
+    html += '<div style="color:#4A4A54; font-size:12px; padding:12px 0">No significant actor changes.</div>';
   }
-  for (const a of spikes) {
+  const maxMentions = spikes.length > 0 ? spikes[0].thisWeek : 1;
+  for (let i = 0; i < spikes.length; i++) {
+    const a = spikes[i];
+    const isTop = i < 3;
+    const barWidth = Math.round((a.thisWeek / maxMentions) * 60);
     if (bw) {
-      html += `<div class="actor-row"><span style="color:#bbb">${escHTML(a.actor)}</span><span style="color:#888">${a.thisWeek} mentions</span></div>`;
+      html += `<div class="actor-row${isTop ? ' top-actor' : ''}"><span class="actor-name">${escHTML(a.actor)}</span><span class="actor-count">${a.thisWeek} mentions<span class="actor-bar" style="width:${barWidth}px"></span></span></div>`;
     } else {
       const cls = a.change > 0 ? 'change-up' : a.change < 0 ? 'change-down' : 'change-flat';
-      html += `<div class="actor-row"><span style="color:#bbb">${escHTML(a.actor)}</span><span style="color:#888">${a.thisWeek} mentions (was ${a.lastWeek}) <span class="${cls}">${formatChange(a.change, bw)}</span></span></div>`;
+      html += `<div class="actor-row${isTop ? ' top-actor' : ''}"><span class="actor-name">${escHTML(a.actor)}</span><span class="actor-count">${a.thisWeek} mentions (was ${a.lastWeek}) <span class="${cls}">${formatChange(a.change, bw)}</span><span class="actor-bar" style="width:${barWidth}px"></span></span></div>`;
     }
   }
 
-  // Footer
+  // Footer — confident, no AI language
   const sourceCount = 16;
   const sevNote = d.dataPoints.highSevRawCount !== d.dataPoints.highSevCount
     ? `${d.dataPoints.highSevRawCount} severity 4-5 events consolidated into ${d.dataPoints.highSevCount} items`
     : `${d.dataPoints.highSevCount} severity 4-5 events`;
-  html += `<div class="footer">Generated from structured event extraction across ${sourceCount} monitored sources covering ${d.dataPoints.countriesThisWeek.join(', ') || 'Horn of Africa'}. ${d.dataPoints.eventsThisWeek} events processed, ${sevNote}. Source links included above.</div>`;
+  html += `<div class="footer">Structured event extraction across ${sourceCount} monitored sources covering ${d.dataPoints.countriesThisWeek.join(', ') || 'Horn of Africa'}. ${d.dataPoints.eventsThisWeek} events processed, ${sevNote}.</div>`;
 
   html += '</body></html>';
   return html;
