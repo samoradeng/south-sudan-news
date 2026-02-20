@@ -9,6 +9,8 @@ const {
   getActorCountsForPeriod,
 } = require('./db');
 
+const { normalizeActor } = require('./extractor');
+
 // ─── Helpers ────────────────────────────────────────────────────
 
 const MIN_BASELINE_EVENTS = 5; // Suppress % deltas below this threshold
@@ -51,52 +53,126 @@ function getISOWeekNumber(date) {
   return 1 + Math.round(((d - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
 }
 
+function safeJSON(s) {
+  if (Array.isArray(s)) return s;
+  try { return JSON.parse(s || '[]'); } catch { return []; }
+}
+
+// ─── Rationale cleanup ──────────────────────────────────────────
+// Old DB entries have verbose AI-justification prose.
+// Strip sentences that start with scoring methodology patterns.
+
+function cleanRationale(rationale) {
+  if (!rationale) return null;
+  // If it starts with "The severity is..." / "The verification status is..." — it's old-style
+  if (/^the (severity|verification)/i.test(rationale.trim())) {
+    // Try to extract the core fact: look for a clause after "due to"
+    const dueToMatch = rationale.match(/due to (.+?)(?:\.|$)/i);
+    if (dueToMatch) {
+      let fact = dueToMatch[1].trim();
+      // Capitalize first letter, add period
+      fact = fact.charAt(0).toUpperCase() + fact.slice(1);
+      if (!fact.endsWith('.')) fact += '.';
+      return fact;
+    }
+    // Fallback: return null (summary speaks for itself)
+    return null;
+  }
+  return rationale;
+}
+
+// ─── Region containment for dedup ───────────────────────────────
+// "El Fasher" is inside "North Darfur" is inside "Darfur"
+// This handles the case where the same story gets tagged to different
+// geographic levels of the same area.
+
+const REGION_CONTAINMENT = {
+  'el fasher': ['north darfur', 'darfur'],
+  'al-fashir': ['north darfur', 'darfur'],
+  'al fashir': ['north darfur', 'darfur'],
+  'nyala': ['south darfur', 'darfur'],
+  'el geneina': ['west darfur', 'darfur'],
+  'zalingei': ['central darfur', 'darfur'],
+  'north darfur': ['darfur'],
+  'south darfur': ['darfur'],
+  'west darfur': ['darfur'],
+  'central darfur': ['darfur'],
+  'east darfur': ['darfur'],
+  'juba': ['central equatoria'],
+  'malakal': ['upper nile'],
+  'bor': ['jonglei'],
+  'bentiu': ['unity'],
+  'wau': ['western bahr el ghazal'],
+};
+
+function regionsOverlap(regionsA, regionsB) {
+  if (regionsA.length === 0 || regionsB.length === 0) return true;
+
+  const normA = regionsA.map(r => r.toLowerCase().trim());
+  const normB = regionsB.map(r => r.toLowerCase().trim());
+
+  for (const a of normA) {
+    for (const b of normB) {
+      // Direct match
+      if (a === b) return true;
+      // A is contained in B's area
+      if ((REGION_CONTAINMENT[a] || []).includes(b)) return true;
+      // B is contained in A's area
+      if ((REGION_CONTAINMENT[b] || []).includes(a)) return true;
+      // Both contained in a common parent
+      const parentsA = REGION_CONTAINMENT[a] || [];
+      const parentsB = REGION_CONTAINMENT[b] || [];
+      if (parentsA.some(p => parentsB.includes(p))) return true;
+    }
+  }
+  return false;
+}
+
 // ─── Event deduplication for digest ─────────────────────────────
-// Groups high-severity events that describe the same story into bundles.
-// Uses region + eventSubtype + severity overlap to detect near-duplicates.
+// Groups high-severity events describing the same story into bundles.
+// Matches on country + subtype + severity, with fuzzy region containment.
+// Allows type mismatch (security/genocide vs humanitarian/genocide = same story).
 
 function bundleHighSeverityEvents(events) {
   const bundles = [];
 
   for (const event of events) {
     const evRegions = safeJSON(event.regions);
-    const evKey = [
-      event.country,
-      event.event_type,
-      event.event_subtype || '',
-      event.severity,
-    ].join('|').toLowerCase();
+    const evSubtype = (event.event_subtype || '').toLowerCase();
+    const evCountry = (event.country || '').toLowerCase();
 
-    // Try to merge into existing bundle with overlapping region + type
+    // Try to merge into existing bundle
     let merged = false;
     for (const bundle of bundles) {
-      const bKey = [
-        bundle.country,
-        bundle.eventType,
-        bundle.eventSubtype || '',
-        bundle.severity,
-      ].join('|').toLowerCase();
+      const bSubtype = (bundle.eventSubtype || '').toLowerCase();
+      const bCountry = (bundle.country || '').toLowerCase();
 
-      // Same country + type + subtype + severity, and overlapping regions
-      const bRegions = bundle.regions.map(r => r.toLowerCase());
-      const hasRegionOverlap = evRegions.length === 0 || bRegions.length === 0 ||
-        evRegions.some(r => bRegions.includes(r.toLowerCase()));
+      // Same country + same subtype + same severity + overlapping regions
+      const sameStory = bCountry === evCountry
+        && bSubtype === evSubtype
+        && bundle.severity === event.severity
+        && regionsOverlap(bundle.regions, evRegions);
 
-      if (bKey === evKey && hasRegionOverlap) {
+      if (sameStory) {
         bundle.sourceCount += event.article_count || 1;
         bundle.sources.push(...safeJSON(event.sources));
-        // Merge in any new regions
+        bundle.articleUrls.push(...safeJSON(event.article_urls));
+        // Merge new regions
         for (const r of evRegions) {
           if (!bundle.regions.some(br => br.toLowerCase() === r.toLowerCase())) {
             bundle.regions.push(r);
           }
         }
-        // Keep the best URL (first one)
+        // Merge actors
+        const evActors = safeJSON(event.actors_normalized || event.actors);
+        for (const a of evActors) {
+          if (!bundle.actors.some(ba => ba.toLowerCase() === a.toLowerCase())) {
+            bundle.actors.push(a);
+          }
+        }
         if (!bundle.primaryUrl && event.primary_url) {
           bundle.primaryUrl = event.primary_url;
         }
-        // Collect article URLs
-        bundle.articleUrls.push(...safeJSON(event.article_urls));
         merged = true;
         break;
       }
@@ -109,16 +185,16 @@ function bundleHighSeverityEvents(events) {
         eventType: event.event_type,
         eventSubtype: event.event_subtype,
         country: event.country,
-        regions: evRegions,
-        actors: safeJSON(event.actors_normalized || event.actors),
-        rationale: event.rationale,
+        regions: [...evRegions],
+        actors: [...safeJSON(event.actors_normalized || event.actors)],
+        rationale: cleanRationale(event.rationale),
         verificationStatus: event.verification_status,
         confidence: event.confidence,
         primaryUrl: event.primary_url,
         publishedAt: event.published_at,
         sourceCount: event.article_count || 1,
         sources: [...new Set(safeJSON(event.sources))],
-        articleUrls: safeJSON(event.article_urls),
+        articleUrls: [...safeJSON(event.article_urls)],
       });
     }
   }
@@ -130,6 +206,21 @@ function bundleHighSeverityEvents(events) {
   }
 
   return bundles;
+}
+
+// ─── Re-normalize actor counts at digest time ───────────────────
+// Old DB entries may have un-merged actors (UN vs United Nations, etc.)
+// Re-apply the canonical alias table and merge counts.
+
+function renormalizeActorList(actorList) {
+  const merged = {};
+  for (const { actor, count } of actorList) {
+    const canonical = normalizeActor(actor);
+    merged[canonical] = (merged[canonical] || 0) + count;
+  }
+  return Object.entries(merged)
+    .sort((a, b) => b[1] - a[1])
+    .map(([actor, count]) => ({ actor, count }));
 }
 
 // ─── Main digest generator ──────────────────────────────────────
@@ -153,9 +244,9 @@ function generateDigest() {
   const twRegions = getRegionSeverityForPeriod(thisWeek.start, thisWeek.end);
   const lwRegions = getRegionSeverityForPeriod(lastWeek.start, lastWeek.end);
 
-  // Actor counts
-  const twActors = getActorCountsForPeriod(thisWeek.start, thisWeek.end);
-  const lwActors = getActorCountsForPeriod(lastWeek.start, lastWeek.end);
+  // Actor counts (re-normalized at digest time)
+  const twActors = renormalizeActorList(getActorCountsForPeriod(thisWeek.start, thisWeek.end));
+  const lwActors = renormalizeActorList(getActorCountsForPeriod(lastWeek.start, lastWeek.end));
 
   // ── Section 1: Topline Shift ──────────────────────────────
   const lwTypeMap = Object.fromEntries(lwTypes.map((t) => [t.event_type, t]));
@@ -241,11 +332,6 @@ function generateDigest() {
   };
 }
 
-function safeJSON(s) {
-  if (Array.isArray(s)) return s;
-  try { return JSON.parse(s || '[]'); } catch { return []; }
-}
-
 // ─── Render to HTML (for email / dashboard preview) ─────────
 
 const SEV_LABELS = { 1: 'Routine', 2: 'Notable', 3: 'Significant', 4: 'Major', 5: 'Critical' };
@@ -292,10 +378,10 @@ a { color: #3498db; text-decoration: none; }
     html += '<div class="baseline-note">Baseline week — insufficient prior data for trend comparison. Raw counts shown.</div>';
   }
 
-  const totalChangeClass = bw ? 'change-new' : (d.topline.totalChange > 0 ? 'change-up' : d.topline.totalChange < 0 ? 'change-down' : 'change-flat');
   if (bw) {
     html += `<div class="topline-row"><span class="topline-type" style="font-weight:600">Total Events</span><span class="topline-nums">${d.topline.totalThisWeek} events tracked</span></div>`;
   } else {
+    const totalChangeClass = d.topline.totalChange > 0 ? 'change-up' : d.topline.totalChange < 0 ? 'change-down' : 'change-flat';
     html += `<div class="topline-row"><span class="topline-type" style="font-weight:600">Total Events</span><span class="topline-nums">${d.topline.totalThisWeek} vs ${d.topline.totalLastWeek} <span class="${totalChangeClass}">${formatChange(d.topline.totalChange, bw)}</span></span></div>`;
   }
 
@@ -311,7 +397,7 @@ a { color: #3498db; text-decoration: none; }
   // Section 2: High-Severity Events (bundled)
   html += '<h2>High-Severity Events</h2>';
   if (d.highSeverity.length === 0) {
-    html += '<div style="color:#555; font-size:13px; padding:12px 0">No severity 4–5 events this week.</div>';
+    html += '<div style="color:#555; font-size:13px; padding:12px 0">No severity 4-5 events this week.</div>';
   }
   for (const e of d.highSeverity) {
     const sevClass = e.severity >= 5 ? 'sev-5' : '';
@@ -324,10 +410,10 @@ a { color: #3498db; text-decoration: none; }
     html += `| ${e.verificationStatus}`;
     if (e.primaryUrl) html += ` | <a href="${escHTML(e.primaryUrl)}">source</a>`;
     html += '</div>';
-    if (e.rationale) html += `<div class="ev-rationale">${escHTML(e.rationale)}</div>`;
     if (e.sourceCount > 1) {
       html += `<div class="ev-sources">${e.sourceCount} articles across ${e.sources.length} sources: ${e.sources.join(', ')}</div>`;
     }
+    if (e.rationale) html += `<div class="ev-rationale">${escHTML(e.rationale)}</div>`;
     html += '</div>';
   }
 
@@ -345,7 +431,7 @@ a { color: #3498db; text-decoration: none; }
     }
   }
 
-  // Section 4: Actor Spikes
+  // Section 4: Actor Activity
   html += '<h2>Actor Activity</h2>';
   const spikes = d.actorSpikes.filter((a) => a.change !== 0).slice(0, 10);
   if (spikes.length === 0) {
@@ -360,8 +446,8 @@ a { color: #3498db; text-decoration: none; }
     }
   }
 
-  // Footer — confident, not defensive
-  const sourceCount = 16; // configured source count
+  // Footer
+  const sourceCount = 16;
   html += `<div class="footer">Generated from structured event extraction across ${sourceCount} monitored sources covering ${d.dataPoints.countriesThisWeek.join(', ') || 'Horn of Africa'}. ${d.dataPoints.eventsThisWeek} events processed, ${d.dataPoints.highSevCount} high-severity. Source links included above.</div>`;
 
   html += '</body></html>';
