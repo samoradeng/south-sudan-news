@@ -1,6 +1,6 @@
 // Structured event extraction — runs in background after feed loads.
 // Every cluster gets tagged with: eventType, subtype, severity, scope,
-// verificationStatus, confidence, actors, country, regions.
+// verificationStatus, confidence, actors, country, regions, rationale.
 // Results persist to SQLite. The front-end doesn't change.
 
 const Groq = require('groq-sdk');
@@ -9,6 +9,14 @@ const { clusterHash, eventExists, insertEvent } = require('./db');
 let groqClient = null;
 const REQUEST_DELAY_MS = 3000;
 const MAX_RETRIES = 3;
+
+// ─── Validation enums ──────────────────────────────────────────
+
+const VALID_EVENT_TYPES = new Set([
+  'security', 'political', 'economic', 'humanitarian', 'infrastructure', 'legal',
+]);
+const VALID_SCOPES = new Set(['local', 'state', 'national', 'cross_border']);
+const VALID_VERIFICATION = new Set(['confirmed', 'reported', 'unverified']);
 
 // Source tier mapping (deterministic — no AI needed)
 const SOURCE_TIERS = {
@@ -60,7 +68,6 @@ async function callGroqWithRetry(params) {
 }
 
 function getSourceTier(sources) {
-  // Use the highest-tier source in the cluster
   for (const s of sources) {
     if (SOURCE_TIERS[s] === 'tier1') return 'tier1';
   }
@@ -69,6 +76,45 @@ function getSourceTier(sources) {
   }
   return 'tier3';
 }
+
+// ─── Validation ─────────────────────────────────────────────────
+
+function validateExtraction(data) {
+  const errors = [];
+
+  if (!data.country || typeof data.country !== 'string') {
+    errors.push('missing country');
+  }
+
+  if (!data.eventType || !VALID_EVENT_TYPES.has(data.eventType)) {
+    errors.push(`invalid eventType: ${data.eventType}`);
+  }
+
+  if (data.severity == null || data.severity < 1 || data.severity > 5) {
+    errors.push(`invalid severity: ${data.severity}`);
+  }
+
+  if (data.scope && !VALID_SCOPES.has(data.scope)) {
+    errors.push(`invalid scope: ${data.scope}`);
+  }
+
+  if (data.verificationStatus && !VALID_VERIFICATION.has(data.verificationStatus)) {
+    errors.push(`invalid verificationStatus: ${data.verificationStatus}`);
+  }
+
+  if (data.confidence != null && (data.confidence < 0 || data.confidence > 1)) {
+    errors.push(`invalid confidence: ${data.confidence}`);
+  }
+
+  // Reject low-confidence extractions entirely
+  if (data.confidence != null && data.confidence < 0.3) {
+    errors.push(`confidence too low: ${data.confidence}`);
+  }
+
+  return errors;
+}
+
+// ─── Extraction prompt ──────────────────────────────────────────
 
 const EXTRACTION_PROMPT = `You are a structured data extractor for a Horn of Africa risk monitoring system.
 Given news articles about a story, extract structured event data as JSON.
@@ -85,22 +131,24 @@ Return ONLY valid JSON (no markdown, no explanation) with these fields:
   "scope": "One of: local, state, national, cross_border",
   "verificationStatus": "One of: confirmed, reported, unverified",
   "confidence": 0.0-1.0,
-  "actors": ["Array of key actors: organizations, governments, armed groups, individuals"]
+  "actors": ["Array of key actors: organizations, governments, armed groups, individuals"],
+  "rationale": "1-2 sentences explaining WHY you chose this severity, scope, and verification status"
 }
 
 Severity scale:
-1 = Routine (scheduled meetings, statements)
-2 = Notable (policy changes, localized incidents)
-3 = Significant (regional displacement, major political shifts)
-4 = Major (large-scale violence, state-level crisis)
+1 = Routine (scheduled meetings, statements, routine reports)
+2 = Notable (policy changes, localized incidents, organizational changes)
+3 = Significant (regional displacement, major political shifts, economic disruptions)
+4 = Major (large-scale violence, state-level crisis, major international intervention)
 5 = Critical (war escalation, mass atrocity, national emergency)
 
 Rules:
 - country should be the PRIMARY country affected
-- regions should use standard admin names (states for South Sudan: Upper Nile, Jonglei, Unity, Warrap, Northern Bahr el Ghazal, Western Bahr el Ghazal, Lakes, Western Equatoria, Central Equatoria, Eastern Equatoria)
+- regions should use standard admin names (South Sudan states: Upper Nile, Jonglei, Unity, Warrap, Northern Bahr el Ghazal, Western Bahr el Ghazal, Lakes, Western Equatoria, Central Equatoria, Eastern Equatoria)
 - eventSubtype should be a short lowercase slug
 - confidence reflects how certain the extracted information is (0.5 = moderate, 0.8 = high, 1.0 = definitive)
 - verificationStatus: "confirmed" if multiple sources or official source, "reported" if credible single source, "unverified" if uncertain
+- rationale MUST explain the severity and verification choices — this is used for quality auditing
 - Return ONLY the JSON object, nothing else`;
 
 async function extractEventData(cluster) {
@@ -121,8 +169,8 @@ async function extractEventData(cluster) {
         { role: 'system', content: EXTRACTION_PROMPT },
         { role: 'user', content: `Extract structured event data from these articles:\n\n${articlesText}` },
       ],
-      max_tokens: 400,
-      temperature: 0.1, // Very low — we want consistent, deterministic extraction
+      max_tokens: 500,
+      temperature: 0.1,
     });
 
     const raw = response.choices[0]?.message?.content?.trim();
@@ -132,8 +180,12 @@ async function extractEventData(cluster) {
     const jsonStr = raw.replace(/^```json?\n?/i, '').replace(/\n?```$/i, '').trim();
     const data = JSON.parse(jsonStr);
 
-    // Validate required fields
-    if (!data.eventType || !data.country) return null;
+    // ── Validate ──────────────────────────────────────────────
+    const errors = validateExtraction(data);
+    if (errors.length > 0) {
+      console.warn(`  Validation failed for "${cluster.primaryArticle.title.slice(0, 40)}...": ${errors.join(', ')}`);
+      return null;
+    }
 
     // Build event record
     const sources = [...new Set(cluster.articles.map((a) => a.source))];
@@ -144,11 +196,12 @@ async function extractEventData(cluster) {
       regions: data.regions || [],
       event_type: data.eventType,
       event_subtype: data.eventSubtype || null,
-      severity: Math.min(5, Math.max(1, data.severity || 2)),
-      scope: data.scope || 'local',
+      severity: Math.min(5, Math.max(1, Math.round(data.severity))),
+      scope: VALID_SCOPES.has(data.scope) ? data.scope : 'local',
       source_tier: getSourceTier(sources),
-      verification_status: data.verificationStatus || 'reported',
+      verification_status: VALID_VERIFICATION.has(data.verificationStatus) ? data.verificationStatus : 'reported',
       confidence: Math.min(1, Math.max(0, data.confidence || 0.5)),
+      rationale: data.rationale || null,
       actors: data.actors || [],
       article_count: cluster.articles.length,
       sources,
@@ -160,7 +213,6 @@ async function extractEventData(cluster) {
     insertEvent(event);
     return event;
   } catch (err) {
-    // Log but don't crash — extraction is best-effort
     console.warn(`  Event extraction failed for "${cluster.primaryArticle.title.slice(0, 50)}...": ${err.message}`);
     return null;
   }
@@ -173,7 +225,6 @@ async function extractAllEvents(clusters) {
     return;
   }
 
-  // Count how many need extraction
   const pending = clusters.filter((c) => !eventExists(clusterHash(c)));
   if (pending.length === 0) {
     console.log('Event extraction: all clusters already in database');
