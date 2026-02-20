@@ -146,6 +146,38 @@ function isRelevantArticle(article) {
   return false;
 }
 
+// ─── Google News URL resolution ─────────────────────────────────
+// Google News RSS items use encoded redirect URLs. The real article URL
+// is extractable from the description HTML or from decoding the URL.
+
+function resolveGoogleNewsUrl(item) {
+  const link = item.link || '';
+  if (!link.includes('news.google.com/')) return link;
+
+  // Method 1: Extract real URL from description HTML
+  // Google News RSS descriptions contain: <a href="https://real-url.com">Title</a>
+  const desc = item.description || item.content || '';
+  const hrefMatch = desc.match(/<a[^>]+href=["']([^"']+)["']/i);
+  if (hrefMatch && hrefMatch[1] && !hrefMatch[1].includes('news.google.com')) {
+    return hrefMatch[1];
+  }
+
+  // Method 2: Decode from Google News URL path (Base64-encoded protobuf)
+  try {
+    const pathMatch = link.match(/\/articles\/([A-Za-z0-9_-]+)/);
+    if (pathMatch) {
+      let encoded = pathMatch[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (encoded.length % 4) encoded += '=';
+      const decoded = Buffer.from(encoded, 'base64').toString('latin1');
+      // Match only printable ASCII to avoid protobuf garbage bytes
+      const urlMatch = decoded.match(/https?:\/\/[\x21-\x7e]+/);
+      if (urlMatch) return urlMatch[0];
+    }
+  } catch {}
+
+  return link; // Fall back to Google News URL
+}
+
 // ─── Image extraction from RSS fields ───────────────────────────
 
 function extractImage(item) {
@@ -181,7 +213,7 @@ function extractImage(item) {
   return null;
 }
 
-// ─── og:image scraping (for non-Google-News URLs only) ──────────
+// ─── og:image scraping ──────────────────────────────────────────
 
 async function scrapeOgImage(articleUrl) {
   try {
@@ -261,11 +293,14 @@ function normalizeArticle(item, sourceName, sourceCategory, sourceReliability) {
   let desc = (item.contentSnippet || item.summary || item.content || '').slice(0, 500).trim();
   desc = desc.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
 
+  // Resolve Google News redirect URLs to real article URLs
+  const url = resolveGoogleNewsUrl(item);
+
   return {
     id: item.guid || item.link || `${sourceName}-${item.title}`,
     title: (item.title || '').trim(),
     description: desc,
-    url: item.link || '',
+    url,
     image: extractImage(item),
     publishedAt: item.isoDate || item.pubDate || new Date().toISOString(),
     source: sourceName,
