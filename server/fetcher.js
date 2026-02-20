@@ -16,8 +16,17 @@ const parser = new Parser({
   },
 });
 
-// Keywords to filter articles that are actually about South Sudan
-const SOUTH_SUDAN_KEYWORDS = [
+// Strong keywords: if found in title, article is definitely about South Sudan
+const STRONG_KEYWORDS = [
+  'south sudan',
+  'south sudanese',
+  'salva kiir',
+  'riek machar',
+  'unmiss',
+];
+
+// Supporting keywords: need 2+ matches in body to confirm South Sudan relevance
+const SUPPORTING_KEYWORDS = [
   'south sudan',
   'south sudanese',
   'juba',
@@ -25,10 +34,8 @@ const SOUTH_SUDAN_KEYWORDS = [
   'riek machar',
   'unmiss',
   'igad',
-  'bor',
   'malakal',
   'bentiu',
-  'wau',
   'yambio',
   'torit',
   'aweil',
@@ -44,8 +51,18 @@ const SOUTH_SUDAN_KEYWORDS = [
 ];
 
 function isAboutSouthSudan(article) {
-  const text = `${article.title || ''} ${article.contentSnippet || ''} ${article.content || ''}`.toLowerCase();
-  return SOUTH_SUDAN_KEYWORDS.some((kw) => text.includes(kw));
+  const title = (article.title || '').toLowerCase();
+  const body = `${article.contentSnippet || ''} ${article.content || ''}`.toLowerCase();
+
+  // If title explicitly mentions South Sudan, it's relevant
+  if (STRONG_KEYWORDS.some((kw) => title.includes(kw))) {
+    return true;
+  }
+
+  // Otherwise, require at least 2 supporting keyword matches in the body
+  // This prevents articles that only mention "Juba" or "IGAD" in passing
+  const bodyMatches = SUPPORTING_KEYWORDS.filter((kw) => body.includes(kw)).length;
+  return bodyMatches >= 2;
 }
 
 function extractImage(item) {
@@ -56,10 +73,18 @@ function extractImage(item) {
   if (item.mediaThumbnail?.$?.url) return item.mediaThumbnail.$.url;
   if (item.mediaGroup?.['media:content']?.$?.url) return item.mediaGroup['media:content'].$.url;
 
-  // Try to extract image from HTML content
-  const html = item.content || item['content:encoded'] || '';
-  const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/);
-  if (imgMatch) return imgMatch[1];
+  // Try to extract image from any HTML field (Google News RSS puts images in description)
+  const htmlSources = [
+    item.content,
+    item['content:encoded'],
+    item.description,
+    item.summary,
+  ];
+  for (const html of htmlSources) {
+    if (!html) continue;
+    const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/);
+    if (imgMatch && imgMatch[1]) return imgMatch[1];
+  }
 
   return null;
 }
