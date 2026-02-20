@@ -396,8 +396,8 @@ const SEV_LABELS = { 1: 'Routine', 2: 'Notable', 3: 'Significant', 4: 'Major', 5
 
 // Muted institutional color ladder — no bright reds, no alarm theater
 const SEV_COLORS = {
-  5: { badge: '#7A1F1F', badgeText: '#D4A0A0', border: '#4A1515' },  // deep burgundy / oxblood
-  4: { badge: '#5C3A10', badgeText: '#D4B07A', border: '#3D2808' },  // burnt amber
+  5: { badge: '#7A1F1F', badgeText: '#D4A0A0', border: '#2A1818' },  // deep burgundy — border barely visible
+  4: { badge: '#5C3A10', badgeText: '#D4B07A', border: '#28200E' },  // burnt amber — badge carries it
   3: { badge: '#2A3A4A', badgeText: '#8AAAC0', border: '#1E2A38' },  // slate blue-gray
   2: { badge: '#2A2A2E', badgeText: '#8A8A90', border: '#1E1E22' },  // neutral gray
   1: { badge: '#222226', badgeText: '#6A6A70', border: '#1A1A1E' },  // light gray
@@ -418,7 +418,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Robo
 .doc-subtitle { font-size: 12px; color: #5A5A64; letter-spacing: 0.2px; margin: 0; }
 
 /* Section headers — quiet authority */
-h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #6A6A74; font-weight: 600; margin: 32px 0 16px 0; padding-bottom: 8px; border-bottom: 1px solid #18181E; }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.6px; color: #6A6A74; font-weight: 600; margin: 36px 0 16px 0; padding-bottom: 8px; border-bottom: 1px solid #18181E; }
 
 /* Baseline notice */
 .baseline-note { color: #7A7A60; font-size: 11px; letter-spacing: 0.2px; margin-bottom: 14px; padding: 8px 12px; background: #12120E; border-radius: 4px; }
@@ -433,7 +433,7 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #
 .change-new { color: #9A8A5A; font-weight: 500; }
 
 /* Event cards — no red stripe, composed neutral */
-.event-card { background: #111116; border: 1px solid #1C1C24; border-radius: 6px; padding: 18px 20px; margin-bottom: 14px; }
+.event-card { background: #111116; border: 1px solid #1C1C24; border-radius: 6px; padding: 20px 22px; margin-bottom: 18px; }
 
 /* Summary headline */
 .event-card .ev-summary { font-size: 14px; color: #D8D8DC; font-weight: 500; line-height: 1.5; margin: 0 0 12px 0; }
