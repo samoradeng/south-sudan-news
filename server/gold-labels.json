@@ -1,0 +1,146 @@
+{
+  "_doc": "Ground truth events for backtesting. Each entry represents a known event with expected extraction fields. The backtest script checks whether the system would have detected and correctly classified these.",
+
+  "events": [
+    {
+      "id": "sudan-war-breakout-2023",
+      "date": "2023-04-15",
+      "dateRange": ["2023-04-14", "2023-04-21"],
+      "description": "Fighting erupts between SAF and RSF in Khartoum",
+      "expected": {
+        "country": "Sudan",
+        "eventType": "security",
+        "severityMin": 5,
+        "actors": ["Sudan Armed Forces (SAF)", "Rapid Support Forces (RSF)"],
+        "regions": ["Khartoum"],
+        "scope": "national"
+      }
+    },
+    {
+      "id": "west-darfur-massacre-2023",
+      "date": "2023-06-15",
+      "dateRange": ["2023-06-12", "2023-06-22"],
+      "description": "Mass killings in El Geneina, West Darfur by RSF and allied militias",
+      "expected": {
+        "country": "Sudan",
+        "eventType": "security",
+        "severityMin": 5,
+        "actors": ["Rapid Support Forces (RSF)"],
+        "regions": ["West Darfur"],
+        "scope": "state"
+      }
+    },
+    {
+      "id": "wad-medani-falls-2023",
+      "date": "2023-12-19",
+      "dateRange": ["2023-12-18", "2023-12-25"],
+      "description": "RSF captures Wad Medani, capital of Gezira state",
+      "expected": {
+        "country": "Sudan",
+        "eventType": "security",
+        "severityMin": 4,
+        "actors": ["Rapid Support Forces (RSF)", "Sudan Armed Forces (SAF)"],
+        "regions": ["Gezira"],
+        "scope": "state"
+      }
+    },
+    {
+      "id": "el-fasher-siege-2024",
+      "date": "2024-05-10",
+      "dateRange": ["2024-05-08", "2024-05-17"],
+      "description": "RSF besieges El Fasher, last SAF-held city in Darfur",
+      "expected": {
+        "country": "Sudan",
+        "eventType": "security",
+        "severityMin": 4,
+        "actors": ["Rapid Support Forces (RSF)", "Sudan Armed Forces (SAF)"],
+        "regions": ["North Darfur"],
+        "scope": "state"
+      }
+    },
+    {
+      "id": "sudan-famine-declaration-2024",
+      "date": "2024-08-01",
+      "dateRange": ["2024-07-30", "2024-08-07"],
+      "description": "IPC declares famine in North Darfur's Zamzam camp",
+      "expected": {
+        "country": "Sudan",
+        "eventType": "humanitarian",
+        "severityMin": 4,
+        "actors": [],
+        "regions": ["North Darfur"],
+        "scope": "state"
+      }
+    },
+    {
+      "id": "ss-jonglei-clashes-2024",
+      "date": "2024-02-15",
+      "dateRange": ["2024-02-12", "2024-02-22"],
+      "description": "Inter-communal violence in Jonglei state, South Sudan",
+      "expected": {
+        "country": "South Sudan",
+        "eventType": "security",
+        "severityMin": 3,
+        "actors": [],
+        "regions": ["Jonglei"],
+        "scope": "state"
+      }
+    },
+    {
+      "id": "ss-oil-shutdown-2024",
+      "date": "2024-02-20",
+      "dateRange": ["2024-02-18", "2024-02-27"],
+      "description": "South Sudan oil production disrupted by Sudan war affecting pipeline through Sudan",
+      "expected": {
+        "country": "South Sudan",
+        "eventType": "economic",
+        "severityMin": 3,
+        "actors": ["Government of South Sudan"],
+        "regions": ["Unity"],
+        "scope": "cross_border"
+      }
+    },
+    {
+      "id": "ss-elections-postponed-2024",
+      "date": "2024-09-22",
+      "dateRange": ["2024-09-20", "2024-09-27"],
+      "description": "South Sudan extends transitional government, postpones elections again",
+      "expected": {
+        "country": "South Sudan",
+        "eventType": "political",
+        "severityMin": 3,
+        "actors": ["Government of South Sudan", "SPLM-IO"],
+        "regions": [],
+        "scope": "national"
+      }
+    },
+    {
+      "id": "sudan-ceasefire-talks-jeddah-2023",
+      "date": "2023-05-20",
+      "dateRange": ["2023-05-18", "2023-05-27"],
+      "description": "SAF and RSF sign short-lived ceasefire agreement in Jeddah, Saudi Arabia",
+      "expected": {
+        "country": "Sudan",
+        "eventType": "political",
+        "severityMin": 3,
+        "actors": ["Sudan Armed Forces (SAF)", "Rapid Support Forces (RSF)"],
+        "regions": [],
+        "scope": "national"
+      }
+    },
+    {
+      "id": "ss-flooding-2024",
+      "date": "2024-10-01",
+      "dateRange": ["2024-09-28", "2024-10-07"],
+      "description": "Severe flooding displaces hundreds of thousands across South Sudan",
+      "expected": {
+        "country": "South Sudan",
+        "eventType": "humanitarian",
+        "severityMin": 3,
+        "actors": [],
+        "regions": ["Unity", "Jonglei", "Upper Nile"],
+        "scope": "national"
+      }
+    }
+  ]
+}
