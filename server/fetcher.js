@@ -62,15 +62,52 @@ function isAboutSouthSudan(article) {
   return bodyMatches >= 2;
 }
 
+// ─── Google News URL decoding ───────────────────────────────────
+// Google News RSS wraps real article URLs in base64-encoded protobuf.
+// Decode to get the actual URL (e.g., reuters.com, bbc.com).
+
+function decodeGoogleNewsUrl(url) {
+  if (!url || !url.includes('news.google.com/')) return url;
+
+  try {
+    const match = url.match(/\/articles\/([A-Za-z0-9_-]+)/);
+    if (!match) return url;
+
+    // Convert base64url to standard base64
+    let b64 = match[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+
+    const decoded = Buffer.from(b64, 'base64').toString('latin1');
+
+    // Find HTTP URL in the decoded protobuf data
+    const urlStart = decoded.indexOf('http');
+    if (urlStart === -1) return url;
+
+    // Extract URL — stop at non-printable or non-ASCII characters
+    let realUrl = '';
+    for (let i = urlStart; i < decoded.length; i++) {
+      const ch = decoded.charCodeAt(i);
+      if (ch < 0x20 || ch > 0x7e) break;
+      realUrl += decoded[i];
+    }
+
+    if (realUrl.match(/^https?:\/\/[a-zA-Z0-9]/)) {
+      return realUrl;
+    }
+  } catch {}
+
+  return url;
+}
+
+// ─── Image extraction from RSS fields ───────────────────────────
+
 function extractImage(item) {
-  // Try multiple RSS image fields
   if (item.enclosure?.url && item.enclosure.type?.startsWith('image')) return item.enclosure.url;
   if (item.enclosure?.url) return item.enclosure.url;
   if (item.mediaContent?.$?.url) return item.mediaContent.$.url;
   if (item.mediaThumbnail?.$?.url) return item.mediaThumbnail.$.url;
   if (item.mediaGroup?.['media:content']?.$?.url) return item.mediaGroup['media:content'].$.url;
 
-  // Try to extract image from any HTML field
   const htmlSources = [
     item.content,
     item['content:encoded'],
@@ -79,15 +116,12 @@ function extractImage(item) {
   ];
   for (const html of htmlSources) {
     if (!html) continue;
-    // Find all img tags, skip 1x1 tracking pixels
     const imgRegex = /<img[^>]+src=["']?([^"'\s>]+)["']?[^>]*>/gi;
     let match;
     while ((match = imgRegex.exec(html))) {
       const tag = match[0];
       let url = match[1];
-      // Skip spacer/tracking pixels
       if (/width=["']?1["']?/i.test(tag) && /height=["']?1["']?/i.test(tag)) continue;
-      // Fix protocol-relative URLs
       if (url.startsWith('//')) url = 'https:' + url;
       if (url.startsWith('http')) return url;
     }
@@ -96,17 +130,19 @@ function extractImage(item) {
   return null;
 }
 
-// ─── og:image scraping for articles without images ──────────────
+// ─── og:image scraping ──────────────────────────────────────────
 
 async function fetchOgImage(articleUrl) {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
 
     const res = await fetch(articleUrl, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html',
       },
       redirect: 'follow',
     });
@@ -115,9 +151,9 @@ async function fetchOgImage(articleUrl) {
     if (!res.ok) return null;
 
     const text = await res.text();
-    const head = text.slice(0, 50000); // Only scan first 50KB
+    const head = text.slice(0, 50000);
 
-    // Try og:image (both attribute orders)
+    // og:image (both attribute orders)
     const ogMatch =
       head.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
       head.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
@@ -128,7 +164,7 @@ async function fetchOgImage(articleUrl) {
       return imgUrl;
     }
 
-    // Try twitter:image as fallback
+    // twitter:image fallback
     const twMatch =
       head.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i) ||
       head.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i);
@@ -149,8 +185,8 @@ async function enrichWithImages(articles) {
   const needImages = articles.filter((a) => !a.image);
   if (needImages.length === 0) return;
 
-  // Only scrape top 15 to keep load time reasonable (~5s max in parallel)
-  const toScrape = needImages.slice(0, 15);
+  // Scrape up to 30 articles in parallel (6s timeout each)
+  const toScrape = needImages.slice(0, 30);
   console.log(`Scraping og:image for ${toScrape.length} articles without images...`);
 
   const results = await Promise.allSettled(
@@ -174,11 +210,14 @@ function normalizeArticle(item, sourceName, sourceCategory, sourceReliability) {
   let desc = (item.contentSnippet || item.summary || item.content || '').slice(0, 500).trim();
   desc = desc.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
 
+  // Decode Google News redirect URLs to real article URLs
+  const realUrl = decodeGoogleNewsUrl(item.link || '');
+
   return {
     id: item.guid || item.link || `${sourceName}-${item.title}`,
     title: (item.title || '').trim(),
     description: desc,
-    url: item.link || '',
+    url: realUrl,
     image: extractImage(item),
     publishedAt: item.isoDate || item.pubDate || new Date().toISOString(),
     source: sourceName,
@@ -216,7 +255,7 @@ async function fetchAllSources() {
   const withImages = filtered.filter((a) => a.image).length;
   console.log(`Images from RSS: ${withImages}/${filtered.length}`);
 
-  // Scrape og:image for articles missing images
+  // Scrape og:image for articles missing images (now using real URLs, not Google redirects)
   await enrichWithImages(filtered);
 
   const withImagesAfter = filtered.filter((a) => a.image).length;
