@@ -50,6 +50,12 @@ function initDB() {
 
       -- Actors
       actors TEXT,               -- JSON array: ["SPLM-IO", "UNMISS"]
+      actors_normalized TEXT,    -- JSON array: normalized actor names
+
+      -- Provenance: audit trail for every extraction
+      model_version TEXT,        -- e.g. "llama-3.3-70b-versatile"
+      prompt_version TEXT,       -- e.g. "v2"
+      article_urls TEXT,         -- JSON array of source article URLs
 
       -- Article metadata
       article_count INTEGER,
@@ -66,13 +72,35 @@ function initDB() {
     CREATE INDEX IF NOT EXISTS idx_events_country ON events(country);
     CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity);
     CREATE INDEX IF NOT EXISTS idx_events_published ON events(published_at);
+
+    -- Quarantine: borderline/failed extractions kept for learning
+    CREATE TABLE IF NOT EXISTS quarantine_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cluster_hash TEXT NOT NULL,
+      raw_output TEXT,           -- raw model response
+      error_reasons TEXT,        -- JSON array of why it failed
+      primary_title TEXT,
+      primary_url TEXT,
+      sources TEXT,              -- JSON array
+      article_urls TEXT,         -- JSON array
+      model_version TEXT,
+      prompt_version TEXT,
+      quarantined_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_quarantine_hash ON quarantine_events(cluster_hash);
   `);
 
-  // Migration: add rationale column if missing (for existing DBs)
-  try {
-    db.exec('ALTER TABLE events ADD COLUMN rationale TEXT');
-  } catch {
-    // Column already exists — ignore
+  // Migrations: add columns if missing (for existing DBs)
+  const migrations = [
+    'ALTER TABLE events ADD COLUMN rationale TEXT',
+    'ALTER TABLE events ADD COLUMN actors_normalized TEXT',
+    'ALTER TABLE events ADD COLUMN model_version TEXT',
+    'ALTER TABLE events ADD COLUMN prompt_version TEXT',
+    'ALTER TABLE events ADD COLUMN article_urls TEXT',
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch { /* column already exists */ }
   }
 
   console.log('Event database initialized');
@@ -88,11 +116,13 @@ function clusterHash(cluster) {
   return crypto.createHash('md5').update(titles).digest('hex');
 }
 
-// Check if this cluster has already been extracted
+// Check if this cluster has already been extracted (or quarantined)
 function eventExists(hash) {
   if (!db) return false;
-  const row = db.prepare('SELECT 1 FROM events WHERE cluster_hash = ?').get(hash);
-  return !!row;
+  const inEvents = db.prepare('SELECT 1 FROM events WHERE cluster_hash = ?').get(hash);
+  if (inEvents) return true;
+  const inQuarantine = db.prepare('SELECT 1 FROM quarantine_events WHERE cluster_hash = ?').get(hash);
+  return !!inQuarantine;
 }
 
 // Insert a structured event
@@ -104,13 +134,17 @@ function insertEvent(event) {
       cluster_hash, summary, country, regions,
       event_type, event_subtype, severity, scope,
       source_tier, verification_status, confidence, rationale,
-      actors, article_count, sources, primary_url, primary_title,
+      actors, actors_normalized,
+      model_version, prompt_version, article_urls,
+      article_count, sources, primary_url, primary_title,
       published_at
     ) VALUES (
       @cluster_hash, @summary, @country, @regions,
       @event_type, @event_subtype, @severity, @scope,
       @source_tier, @verification_status, @confidence, @rationale,
-      @actors, @article_count, @sources, @primary_url, @primary_title,
+      @actors, @actors_normalized,
+      @model_version, @prompt_version, @article_urls,
+      @article_count, @sources, @primary_url, @primary_title,
       @published_at
     )
   `);
@@ -129,11 +163,42 @@ function insertEvent(event) {
     confidence: event.confidence || 0.5,
     rationale: event.rationale || null,
     actors: JSON.stringify(event.actors || []),
+    actors_normalized: JSON.stringify(event.actors_normalized || []),
+    model_version: event.model_version || null,
+    prompt_version: event.prompt_version || null,
+    article_urls: JSON.stringify(event.article_urls || []),
     article_count: event.article_count || 1,
     sources: JSON.stringify(event.sources || []),
     primary_url: event.primary_url,
     primary_title: event.primary_title,
     published_at: event.published_at,
+  });
+}
+
+// Insert a quarantined extraction (borderline/failed)
+function insertQuarantine(record) {
+  if (!db) return;
+
+  db.prepare(`
+    INSERT INTO quarantine_events (
+      cluster_hash, raw_output, error_reasons,
+      primary_title, primary_url, sources, article_urls,
+      model_version, prompt_version
+    ) VALUES (
+      @cluster_hash, @raw_output, @error_reasons,
+      @primary_title, @primary_url, @sources, @article_urls,
+      @model_version, @prompt_version
+    )
+  `).run({
+    cluster_hash: record.cluster_hash,
+    raw_output: record.raw_output || null,
+    error_reasons: JSON.stringify(record.error_reasons || []),
+    primary_title: record.primary_title || null,
+    primary_url: record.primary_url || null,
+    sources: JSON.stringify(record.sources || []),
+    article_urls: JSON.stringify(record.article_urls || []),
+    model_version: record.model_version || null,
+    prompt_version: record.prompt_version || null,
   });
 }
 
@@ -192,12 +257,13 @@ function getHighSeverityEvents(minSeverity = 4, days = 7) {
 
 function getTopActors(limit = 20) {
   if (!db) return [];
-  const events = db.prepare('SELECT actors FROM events').all();
+  // Prefer normalized actors, fall back to raw
+  const events = db.prepare('SELECT actors, actors_normalized FROM events').all();
 
   const counts = {};
   for (const row of events) {
     try {
-      const actors = JSON.parse(row.actors || '[]');
+      const actors = JSON.parse(row.actors_normalized || row.actors || '[]');
       for (const actor of actors) {
         const normalized = actor.trim();
         if (normalized) counts[normalized] = (counts[normalized] || 0) + 1;
@@ -231,7 +297,67 @@ function getEventsByRegion() {
     .map(([region, count]) => ({ region, count }));
 }
 
+// ─── Data quality metrics ───────────────────────────────────────
+
+function getDataQuality() {
+  if (!db) return null;
+
+  const quarantineTotal = db.prepare('SELECT COUNT(*) as count FROM quarantine_events').get();
+  const quarantine24h = db.prepare(
+    "SELECT COUNT(*) as count FROM quarantine_events WHERE quarantined_at > datetime('now', '-1 day')"
+  ).get();
+  const quarantine7d = db.prepare(
+    "SELECT COUNT(*) as count FROM quarantine_events WHERE quarantined_at > datetime('now', '-7 days')"
+  ).get();
+
+  const eventsTotal = db.prepare('SELECT COUNT(*) as count FROM events').get();
+  const events24h = db.prepare(
+    "SELECT COUNT(*) as count FROM events WHERE extracted_at > datetime('now', '-1 day')"
+  ).get();
+
+  // Confidence trend: average per day for last 7 days
+  const confidenceTrend = db.prepare(`
+    SELECT DATE(extracted_at) as day, ROUND(AVG(confidence), 2) as avg_confidence, COUNT(*) as count
+    FROM events
+    WHERE extracted_at > datetime('now', '-7 days')
+    GROUP BY DATE(extracted_at)
+    ORDER BY day
+  `).all();
+
+  // Missing regions by source
+  const missingBySource = db.prepare(`
+    SELECT s.value as source_name,
+           COUNT(*) as total,
+           SUM(CASE WHEN e.regions = '[]' OR e.regions IS NULL THEN 1 ELSE 0 END) as missing
+    FROM events e, json_each(e.sources) s
+    GROUP BY s.value
+    ORDER BY missing DESC
+  `).all();
+
+  // Severity distribution sanity
+  const sevDistrib = db.prepare(
+    'SELECT severity, COUNT(*) as count FROM events GROUP BY severity ORDER BY severity'
+  ).all();
+
+  // Recent quarantine reasons
+  const recentQuarantine = db.prepare(
+    'SELECT primary_title, error_reasons, quarantined_at FROM quarantine_events ORDER BY quarantined_at DESC LIMIT 10'
+  ).all();
+
+  return {
+    quarantine: { total: quarantineTotal.count, last24h: quarantine24h.count, last7d: quarantine7d.count },
+    events: { total: eventsTotal.count, last24h: events24h.count },
+    acceptRate: eventsTotal.count + quarantineTotal.count > 0
+      ? Math.round((eventsTotal.count / (eventsTotal.count + quarantineTotal.count)) * 100) : 100,
+    confidenceTrend,
+    missingBySource,
+    sevDistrib,
+    recentQuarantine,
+  };
+}
+
 module.exports = {
-  initDB, clusterHash, eventExists, insertEvent,
+  initDB, clusterHash, eventExists, insertEvent, insertQuarantine,
   getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion,
+  getDataQuality,
 };

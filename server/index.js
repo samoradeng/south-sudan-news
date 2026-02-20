@@ -4,7 +4,7 @@ const NodeCache = require('node-cache');
 const { fetchAllSources } = require('./fetcher');
 const { clusterArticles } = require('./cluster');
 const { initGroq, extractiveSummary, deepSummarizeCluster, answerFollowUp } = require('./summarizer');
-const { initDB, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion } = require('./db');
+const { initDB, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion, getDataQuality } = require('./db');
 const { initExtractor, extractAllEvents } = require('./extractor');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -183,6 +183,10 @@ app.get('/api/admin/regions', (req, res) => {
   res.json({ regions: getEventsByRegion() });
 });
 
+app.get('/api/admin/quality', (req, res) => {
+  res.json(getDataQuality());
+});
+
 // Serve admin dashboard
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
@@ -190,4 +194,39 @@ app.get('/admin', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`South Sudan News running at http://localhost:${PORT}`);
+
+  // ─── Background extraction: runs every 15 minutes independent of traffic ──
+  const EXTRACTION_INTERVAL_MS = 15 * 60 * 1000;
+
+  async function backgroundFetchAndExtract() {
+    try {
+      // Reuse cached clusters if available, otherwise fetch fresh
+      let data = cache.get('clusters');
+      if (!data) {
+        console.log('[background] Fetching fresh articles for extraction...');
+        const articles = await fetchAllSources();
+        if (articles.length === 0) return;
+        const clusters = clusterArticles(articles);
+        const summarized = clusters.map((c) => ({
+          ...c,
+          summary: extractiveSummary(c),
+        }));
+        data = {
+          clusters: summarized,
+          totalArticles: articles.length,
+          sources: [...new Set(articles.map((a) => a.source))],
+          lastUpdated: new Date().toISOString(),
+        };
+        cache.set('clusters', data, CLUSTERS_TTL);
+      }
+      await extractAllEvents(data.clusters);
+    } catch (err) {
+      console.error('[background] Extraction cycle error:', err.message);
+    }
+  }
+
+  if (process.env.GROQ_API_KEY) {
+    setInterval(backgroundFetchAndExtract, EXTRACTION_INTERVAL_MS);
+    console.log(`Background extraction scheduled every ${EXTRACTION_INTERVAL_MS / 60000} minutes`);
+  }
 });
