@@ -147,30 +147,25 @@ function isRelevantArticle(article) {
 }
 
 // ─── Google News URL resolution ─────────────────────────────────
-// Google News RSS items use encoded redirect URLs. The real article URL
-// is extractable from the description HTML or from decoding the URL.
+// Modern Google News URLs (2024+) use encrypted protobuf encoding.
+// The only reliable server-side decode method is Google's internal
+// batchexecute API endpoint (DotsSplashUi/data/batchexecute).
 
-let _gnDiagLogged = false; // Log diagnostic for first Google News item only
+let _gnDiagLogged = false;
 
 function resolveGoogleNewsUrl(item) {
   const link = item.link || '';
   if (!link.includes('news.google.com/')) return link;
 
-  // One-time diagnostic: show what data rss-parser gives us for Google News items
+  // One-time diagnostic
   if (!_gnDiagLogged) {
     _gnDiagLogged = true;
-    console.log(`  [GN diagnostic] link: ${link.slice(0, 100)}...`);
-    console.log(`  [GN diagnostic] item.content length: ${(item.content || '').length}, has <a: ${/<a\s/i.test(item.content || '')}`);
-    console.log(`  [GN diagnostic] item.summary length: ${(item.summary || '').length}`);
-    console.log(`  [GN diagnostic] item.description: ${typeof item.description}, length: ${(item.description || '').length}`);
-    console.log(`  [GN diagnostic] item.content first 300: ${(item.content || '').slice(0, 300)}`);
-    // Check for source field (Google News RSS has <source url="...">)
-    console.log(`  [GN diagnostic] item.source: ${JSON.stringify(item.source || null)}`);
-    console.log(`  [GN diagnostic] item.sourceUrl: ${item.sourceUrl || 'n/a'}`);
+    console.log(`  [GN] First item — content has <a>: ${/<a\s/i.test(item.content || '')}, hrefs point to: ${
+      (item.content || '').includes('news.google.com') ? 'google (encrypted)' : 'publisher (decodable)'
+    }`);
   }
 
-  // Method 1: Extract real URL from description/content HTML
-  // Google News RSS descriptions contain: <a href="https://real-url.com">Title</a>
+  // Method 1: Extract real URL from description/content HTML (works for older format)
   const htmlSources = [item.content, item.description, item.summary, item['content:encoded']];
   for (const html of htmlSources) {
     if (!html) continue;
@@ -180,23 +175,18 @@ function resolveGoogleNewsUrl(item) {
     }
   }
 
-  // Method 2: Decode from Google News URL path (Base64-encoded protobuf)
-  // Scan decoded bytes for "http" pattern instead of relying on string matching
+  // Method 2: Scan Base64-decoded protobuf bytes for "http" (works for some formats)
   try {
     const pathMatch = link.match(/\/articles\/([A-Za-z0-9_-]+)/);
     if (pathMatch) {
       let encoded = pathMatch[1].replace(/-/g, '+').replace(/_/g, '/');
       while (encoded.length % 4) encoded += '=';
       const bytes = Buffer.from(encoded, 'base64');
-
-      // Scan for "http" (0x68 0x74 0x74 0x70) in the raw bytes
       for (let i = 0; i < bytes.length - 10; i++) {
         if (bytes[i] === 0x68 && bytes[i + 1] === 0x74 && bytes[i + 2] === 0x74 && bytes[i + 3] === 0x70) {
-          // Found "http" — read until non-URL byte
           let end = i;
           while (end < bytes.length && bytes[end] >= 0x21 && bytes[end] <= 0x7e) end++;
           const candidate = bytes.slice(i, end).toString('utf8');
-          // Validate it looks like a real URL (not google.com redirect)
           if (/^https?:\/\/[a-z0-9]/.test(candidate) && !candidate.includes('news.google.com')) {
             return candidate;
           }
@@ -205,7 +195,7 @@ function resolveGoogleNewsUrl(item) {
     }
   } catch {}
 
-  return link; // Fall back to Google News URL
+  return link; // Will be resolved async via batchexecute API
 }
 
 // ─── Image extraction from RSS fields ───────────────────────────
@@ -271,28 +261,10 @@ function extractOgImage(html) {
   return null;
 }
 
-// Extract redirect target from a Google News redirector page
-function extractGoogleRedirect(html) {
-  const head = html.slice(0, 30000);
-
-  // meta http-equiv="refresh" content="0;url=..."
-  const metaRefresh = head.match(/http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"'\s>]+)/i);
-  if (metaRefresh?.[1] && !metaRefresh[1].includes('google.com')) return metaRefresh[1];
-
-  // window.location = "..." or window.location.href = "..."
-  const jsRedirect = head.match(/window\.location(?:\.href)?\s*=\s*["'](https?:\/\/[^"']+)["']/i);
-  if (jsRedirect?.[1] && !jsRedirect[1].includes('google.com')) return jsRedirect[1];
-
-  // data-url attribute
-  const dataUrl = head.match(/data-url=["'](https?:\/\/[^"']+)["']/i);
-  if (dataUrl?.[1] && !dataUrl[1].includes('google.com')) return dataUrl[1];
-
-  // First external <a href> in body
-  const aHref = head.match(/<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*>/i);
-  if (aHref?.[1] && !aHref[1].includes('google.com')) return aHref[1];
-
-  return null;
-}
+// ─── Google News batchexecute API decoder ───────────────────────
+// Modern Google News URLs use encrypted protobuf that can't be decoded
+// locally. The only reliable approach is Google's internal batchexecute
+// API (DotsSplashUi/data/batchexecute) with the "Fbv4je" RPC method.
 
 async function fetchPage(url, timeout = 8000) {
   const controller = new AbortController();
@@ -314,31 +286,65 @@ async function fetchPage(url, timeout = 8000) {
   return { html, finalUrl: res.url, status: res.status };
 }
 
+async function decodeGoogleNewsArticle(articleUrl) {
+  const idMatch = articleUrl.match(/\/articles\/([A-Za-z0-9_-]+)/);
+  if (!idMatch) return null;
+  const articleId = idMatch[1];
+
+  // Build the batchexecute payload
+  // Inner: ["garturlreq", [["en-US", "US", [articleId]], null x30]]
+  const innerPayload = ['garturlreq', [[['en-US', 'US', [articleId]],
+    ...new Array(30).fill(null)]]];
+  const outerPayload = [[['Fbv4je', JSON.stringify(innerPayload), null, 'generic']]];
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  const res = await fetch('https://news.google.com/_/DotsSplashUi/data/batchexecute', {
+    method: 'POST',
+    signal: controller.signal,
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      'User-Agent': BROWSER_UA,
+      Referer: 'https://news.google.com/',
+    },
+    body: `f.req=${encodeURIComponent(JSON.stringify(outerPayload))}`,
+  });
+  clearTimeout(timeoutId);
+
+  if (!res.ok) return null;
+
+  const text = await res.text();
+
+  // Response format: )]}'\n<length>\n[JSON with nested arrays containing the URL]
+  // The decoded URL appears as a plain https:// string in the response
+  // Try to find it — scan for URLs not on google domains
+  const urlMatches = text.match(/https?:\/\/[^\s"\\,\]\)]+/g);
+  if (urlMatches) {
+    for (const url of urlMatches) {
+      const clean = url.replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+      if (!clean.includes('google.com') && !clean.includes('gstatic.com') &&
+          !clean.includes('googleapis.com') && /^https?:\/\/[a-z0-9]/.test(clean)) {
+        return clean;
+      }
+    }
+  }
+
+  return null;
+}
+
 async function scrapeOgImage(articleUrl) {
   try {
-    const isGoogleUrl = articleUrl.includes('news.google.com/');
-    const { html, finalUrl } = await fetchPage(articleUrl);
+    if (articleUrl.includes('news.google.com/')) return null; // Can't scrape Google SPA
+    const { html } = await fetchPage(articleUrl);
     if (!html) return null;
-
-    // If we landed on a Google redirector page, extract the real URL and follow it
-    if (isGoogleUrl || finalUrl.includes('google.com')) {
-      const realUrl = extractGoogleRedirect(html);
-      if (realUrl) {
-        const { html: realHtml } = await fetchPage(realUrl, 5000);
-        if (realHtml) return extractOgImage(realHtml);
-      }
-      return null; // Stuck on Google — no image possible
-    }
-
     return extractOgImage(html);
   } catch {
     return null;
   }
 }
 
-// ─── Async Google News URL resolution (bulk) ────────────────────
-// For articles where the sync Base64/description methods failed,
-// fetch the Google redirector page and extract the real URL.
+// ─── Async Google News URL resolution (via batchexecute API) ────
 
 async function resolveGoogleRedirects(articles) {
   const googleArticles = articles.filter(
@@ -346,55 +352,43 @@ async function resolveGoogleRedirects(articles) {
   );
   if (googleArticles.length === 0) return;
 
-  console.log(`Resolving ${googleArticles.length} unresolved Google News URLs...`);
+  console.log(`Decoding ${googleArticles.length} Google News URLs via batchexecute API...`);
 
-  const BATCH_SIZE = 10;
+  const BATCH_SIZE = 5; // Smaller batches to avoid rate limiting
   let resolved = 0;
+  let errors = 0;
   let diagLogged = false;
 
   for (let i = 0; i < googleArticles.length; i += BATCH_SIZE) {
     const batch = googleArticles.slice(i, i + BATCH_SIZE);
     const results = await Promise.allSettled(
-      batch.map(async (a) => {
-        try {
-          const { html, finalUrl, status } = await fetchPage(a.url, 6000);
-
-          // Diagnostic: log details of first attempt
-          if (!diagLogged) {
-            diagLogged = true;
-            console.log(`  [GN redirect diag] URL: ${a.url.slice(0, 80)}...`);
-            console.log(`  [GN redirect diag] HTTP status: ${status}, finalUrl: ${(finalUrl || '').slice(0, 100)}`);
-            console.log(`  [GN redirect diag] HTML length: ${(html || '').length}`);
-            console.log(`  [GN redirect diag] HTML first 500: ${(html || '').slice(0, 500)}`);
-          }
-
-          // If HTTP redirect already resolved it
-          if (finalUrl && !finalUrl.includes('google.com')) return finalUrl;
-
-          // Parse the Google redirector page
-          if (html) {
-            const realUrl = extractGoogleRedirect(html);
-            if (realUrl) return realUrl;
-          }
-          return null;
-        } catch (err) {
-          if (!diagLogged) {
-            diagLogged = true;
-            console.log(`  [GN redirect diag] ERROR: ${err.message}`);
-          }
-          return null;
-        }
-      })
+      batch.map((a) => decodeGoogleNewsArticle(a.url))
     );
     results.forEach((r, j) => {
       if (r.status === 'fulfilled' && r.value) {
+        // One-time diagnostic
+        if (!diagLogged) {
+          diagLogged = true;
+          console.log(`  [GN decode] Sample: ${batch[j].url.slice(0, 60)}... => ${r.value.slice(0, 80)}`);
+        }
         batch[j].url = r.value;
         resolved++;
+      } else {
+        errors++;
+        if (!diagLogged && r.status === 'rejected') {
+          diagLogged = true;
+          console.log(`  [GN decode] First error: ${r.reason?.message || 'unknown'}`);
+        }
       }
     });
+
+    // Small delay between batches to avoid rate limiting
+    if (i + BATCH_SIZE < googleArticles.length) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
   }
 
-  console.log(`Resolved ${resolved}/${googleArticles.length} Google News URLs to real articles`);
+  console.log(`Decoded ${resolved}/${googleArticles.length} Google News URLs (${errors} failed)`);
 }
 
 async function enrichWithImages(articles) {
@@ -477,7 +471,7 @@ async function fetchAllSources() {
   const syncResolved = filtered.filter((a) => !a.url.includes('news.google.com/')).length - withImages;
   console.log(`Total: ${filtered.length} articles, ${withImages} with images from RSS`);
 
-  // Phase 1: Resolve remaining Google News URLs by fetching their redirect pages
+  // Phase 1: Decode Google News URLs via batchexecute API
   await resolveGoogleRedirects(filtered);
 
   // Phase 2: Scrape og:image for articles that now have real URLs
