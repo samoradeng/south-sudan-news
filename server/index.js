@@ -5,7 +5,7 @@ const NodeCache = require('node-cache');
 const { fetchAllSources } = require('./fetcher');
 const { clusterArticles } = require('./cluster');
 const { initGroq, extractiveSummary, deepSummarizeCluster, answerFollowUp } = require('./summarizer');
-const { initDB, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion, getDataQuality, generateUnsubToken, isUnsubscribed, addUnsubscribe } = require('./db');
+const { initDB, clusterHash, getEventByClusterHash, getIntelligenceSnapshot, getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion, getDataQuality, generateUnsubToken, isUnsubscribed, addUnsubscribe } = require('./db');
 const { initExtractor, extractAllEvents } = require('./extractor');
 const { generateDigest, renderDigestHTML, renderDigestText } = require('./digest');
 
@@ -104,43 +104,77 @@ const sendLimiter = rateLimit(3600000, 3);   // 3 sends/hour for digest
 
 // ─── Public API ─────────────────────────────────────────────────
 
+// Enrich clusters with intelligence data from events DB (always fresh)
+function enrichClusters(clusters) {
+  const enriched = clusters.map((c) => {
+    const hash = clusterHash(c);
+    const event = getEventByClusterHash(hash);
+    if (!event) return c;
+    return {
+      ...c,
+      event: {
+        severity: event.severity,
+        eventType: event.event_type,
+        eventSubtype: event.event_subtype,
+        verificationStatus: event.verification_status,
+        actors: JSON.parse(event.actors_normalized || event.actors || '[]'),
+        regions: JSON.parse(event.regions || '[]'),
+        scope: event.scope,
+        rationale: event.rationale,
+      },
+    };
+  });
+
+  // Sort by severity (highest first), then recency
+  enriched.sort((a, b) => {
+    const sevA = a.event?.severity || 0;
+    const sevB = b.event?.severity || 0;
+    if (sevB !== sevA) return sevB - sevA;
+    return new Date(b.latestDate) - new Date(a.latestDate);
+  });
+
+  return enriched;
+}
+
 app.get('/api/news', apiLimiter, async (req, res) => {
   try {
-    const cached = cache.get('clusters');
-    if (cached) {
-      return res.json(cached);
+    let rawData = cache.get('clusters-raw');
+
+    if (!rawData) {
+      console.log('Fetching articles from all sources...');
+      const articles = await fetchAllSources();
+      console.log(`Fetched ${articles.length} articles total`);
+
+      if (articles.length === 0) {
+        return res.json({ clusters: [], totalArticles: 0, sources: [] });
+      }
+
+      const clusters = clusterArticles(articles);
+      console.log(`Grouped into ${clusters.length} story clusters`);
+
+      const summarized = clusters.map((c) => ({
+        ...c,
+        summary: extractiveSummary(c),
+      }));
+
+      rawData = {
+        clusters: summarized,
+        totalArticles: articles.length,
+        sources: [...new Set(articles.map((a) => a.source))],
+        lastUpdated: new Date().toISOString(),
+      };
+
+      cache.set('clusters-raw', rawData, CLUSTERS_TTL);
+
+      // Background: extract structured event data
+      extractAllEvents(summarized).catch((err) => {
+        console.error('Background event extraction error:', err.message);
+      });
     }
 
-    console.log('Fetching articles from all sources...');
-    const articles = await fetchAllSources();
-    console.log(`Fetched ${articles.length} articles total`);
-
-    if (articles.length === 0) {
-      return res.json({ clusters: [], totalArticles: 0, sources: [] });
-    }
-
-    const clusters = clusterArticles(articles);
-    console.log(`Grouped into ${clusters.length} story clusters`);
-
-    const summarized = clusters.map((c) => ({
-      ...c,
-      summary: extractiveSummary(c),
-    }));
-
-    const response = {
-      clusters: summarized,
-      totalArticles: articles.length,
-      sources: [...new Set(articles.map((a) => a.source))],
-      lastUpdated: new Date().toISOString(),
-    };
-
-    cache.set('clusters', response, CLUSTERS_TTL);
-    res.json(response);
-
-    // Background: extract structured event data
-    extractAllEvents(summarized).catch((err) => {
-      console.error('Background event extraction error:', err.message);
-    });
+    // Always enrich from events DB (picks up newly extracted events immediately)
+    const enriched = enrichClusters(rawData.clusters);
+    res.json({ ...rawData, clusters: enriched });
   } catch (err) {
     console.error('Error in /api/news:', err);
     res.status(500).json({ error: 'Failed to fetch news' });
@@ -150,19 +184,25 @@ app.get('/api/news', apiLimiter, async (req, res) => {
 app.get('/api/story/:index', aiLimiter, async (req, res) => {
   try {
     const index = parseInt(req.params.index);
-    const cached = cache.get('clusters');
+    const rawData = cache.get('clusters-raw');
 
-    if (!cached || !cached.clusters[index]) {
+    if (!rawData || !rawData.clusters) {
       return res.status(404).json({ error: 'Story not found' });
     }
 
-    const deepKey = `deep-${index}`;
+    // Enrich to get sorted order matching what the frontend sees
+    const enriched = enrichClusters(rawData.clusters);
+    if (!enriched[index]) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+
+    const cluster = enriched[index];
+    const deepKey = `deep-${cluster.primaryArticle.title.slice(0, 50)}`;
     const cachedDeep = cache.get(deepKey);
     if (cachedDeep) {
       return res.json(cachedDeep);
     }
 
-    const cluster = cached.clusters[index];
     console.log(`Generating deep summary for story ${index}: "${cluster.primaryArticle.title.slice(0, 60)}..."`);
 
     const deepSummary = await deepSummarizeCluster(cluster);
@@ -188,12 +228,17 @@ app.post('/api/followup', aiLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Missing question or storyIndex' });
     }
 
-    const cached = cache.get('clusters');
-    if (!cached || !cached.clusters[storyIndex]) {
+    const rawData = cache.get('clusters-raw');
+    if (!rawData || !rawData.clusters) {
       return res.status(404).json({ error: 'Story not found' });
     }
 
-    const cluster = cached.clusters[storyIndex];
+    const enriched = enrichClusters(rawData.clusters);
+    if (!enriched[storyIndex]) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+
+    const cluster = enriched[storyIndex];
     const answer = await answerFollowUp(cluster, question);
 
     res.json({ answer });
@@ -204,10 +249,23 @@ app.post('/api/followup', aiLimiter, async (req, res) => {
 });
 
 app.post('/api/news/refresh', apiLimiter, async (req, res) => {
-  cache.del('clusters');
+  cache.del('clusters-raw');
+  cache.del('intelligence');
   const keys = cache.keys();
   keys.filter((k) => k.startsWith('deep-')).forEach((k) => cache.del(k));
   res.json({ message: 'Cache cleared. Next request will fetch fresh data.' });
+});
+
+// Public intelligence snapshot (for homepage banner)
+app.get('/api/intelligence', apiLimiter, (req, res) => {
+  const cached = cache.get('intelligence');
+  if (cached) return res.json(cached);
+
+  const snapshot = getIntelligenceSnapshot();
+  if (snapshot) {
+    cache.set('intelligence', snapshot, 300); // 5 min cache
+  }
+  res.json(snapshot || { eventsThisWeek: 0, highSeverityCount: 0, topRegion: null, topActor: null, severityDistribution: [] });
 });
 
 // Health check (public — no auth, no rate limit)
@@ -316,7 +374,7 @@ app.listen(PORT, () => {
 
   async function backgroundFetchAndExtract() {
     try {
-      let data = cache.get('clusters');
+      let data = cache.get('clusters-raw');
       if (!data) {
         console.log('[background] Fetching fresh articles for extraction...');
         const articles = await fetchAllSources();
@@ -332,9 +390,11 @@ app.listen(PORT, () => {
           sources: [...new Set(articles.map((a) => a.source))],
           lastUpdated: new Date().toISOString(),
         };
-        cache.set('clusters', data, CLUSTERS_TTL);
+        cache.set('clusters-raw', data, CLUSTERS_TTL);
       }
       await extractAllEvents(data.clusters);
+      // Clear intelligence cache so banner updates after extraction
+      cache.del('intelligence');
     } catch (err) {
       console.error('[background] Extraction cycle error:', err.message);
     }
