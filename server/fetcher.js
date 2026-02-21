@@ -286,6 +286,8 @@ async function fetchPage(url, timeout = 8000) {
   return { html, finalUrl: res.url, status: res.status };
 }
 
+let _batchDiagLogged = false;
+
 async function decodeGoogleNewsArticle(articleUrl) {
   const idMatch = articleUrl.match(/\/articles\/([A-Za-z0-9_-]+)/);
   if (!idMatch) return null;
@@ -296,6 +298,7 @@ async function decodeGoogleNewsArticle(articleUrl) {
   const innerPayload = ['garturlreq', [[['en-US', 'US', [articleId]],
     ...new Array(30).fill(null)]]];
   const outerPayload = [[['Fbv4je', JSON.stringify(innerPayload), null, 'generic']]];
+  const bodyStr = `f.req=${encodeURIComponent(JSON.stringify(outerPayload))}`;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -308,21 +311,54 @@ async function decodeGoogleNewsArticle(articleUrl) {
       'User-Agent': BROWSER_UA,
       Referer: 'https://news.google.com/',
     },
-    body: `f.req=${encodeURIComponent(JSON.stringify(outerPayload))}`,
+    body: bodyStr,
   });
   clearTimeout(timeoutId);
 
-  if (!res.ok) return null;
+  // Diagnostic: log first response details
+  if (!_batchDiagLogged) {
+    _batchDiagLogged = true;
+    console.log(`  [GN batch diag] HTTP status: ${res.status}`);
+    console.log(`  [GN batch diag] Article ID length: ${articleId.length}`);
+    console.log(`  [GN batch diag] Body length: ${bodyStr.length}`);
+  }
+
+  if (!res.ok) {
+    if (!_batchDiagLogged) console.log(`  [GN batch diag] Non-OK status: ${res.status}`);
+    return null;
+  }
 
   const text = await res.text();
 
+  // Diagnostic: log first response body
+  if (_batchDiagLogged && !decodeGoogleNewsArticle._bodyLogged) {
+    decodeGoogleNewsArticle._bodyLogged = true;
+    console.log(`  [GN batch diag] Response length: ${text.length}`);
+    console.log(`  [GN batch diag] Response first 500: ${text.slice(0, 500)}`);
+    // Also check for escaped URLs
+    const escaped = text.match(/https?:\\u002F\\u002F[^"]+/g);
+    const slashed = text.match(/https?:\\\/\\\/[^"]+/g);
+    const plain = text.match(/https?:\/\/[^\s"\\,\]\)]+/g);
+    console.log(`  [GN batch diag] URL patterns found: plain=${(plain || []).length}, escaped=${(escaped || []).length}, slashed=${(slashed || []).length}`);
+    if (plain) console.log(`  [GN batch diag] First 3 URLs: ${plain.slice(0, 3).join(' | ')}`);
+  }
+
   // Response format: )]}'\n<length>\n[JSON with nested arrays containing the URL]
-  // The decoded URL appears as a plain https:// string in the response
-  // Try to find it — scan for URLs not on google domains
-  const urlMatches = text.match(/https?:\/\/[^\s"\\,\]\)]+/g);
-  if (urlMatches) {
-    for (const url of urlMatches) {
-      const clean = url.replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+  // Try multiple URL patterns
+  const patterns = [
+    /https?:\\u002F\\u002F[^"\\]+/g,     // Unicode-escaped slashes
+    /https?:\\\/\\\/[^"\\]+/g,             // Backslash-escaped slashes
+    /https?:\/\/[^\s"\\,\]\)]+/g,         // Plain URLs
+  ];
+
+  for (const pattern of patterns) {
+    const matches = text.match(pattern);
+    if (!matches) continue;
+    for (const raw of matches) {
+      const clean = raw
+        .replace(/\\u002F/g, '/')
+        .replace(/\\\//g, '/')
+        .replace(/\\"/g, '');
       if (!clean.includes('google.com') && !clean.includes('gstatic.com') &&
           !clean.includes('googleapis.com') && /^https?:\/\/[a-z0-9]/.test(clean)) {
         return clean;
@@ -332,6 +368,7 @@ async function decodeGoogleNewsArticle(articleUrl) {
 
   return null;
 }
+decodeGoogleNewsArticle._bodyLogged = false;
 
 async function scrapeOgImage(articleUrl) {
   try {
