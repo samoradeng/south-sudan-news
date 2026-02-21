@@ -303,8 +303,10 @@ async function scrapeOgImage(articleUrl) {
 // 2. Calls batchexecute with those auth params to get the real publisher URL
 
 async function resolveGoogleRedirects(articles) {
+  // Resolve ALL Google News URLs, not just those without images
+  // (we need real URLs for article text fetching + og:image scraping)
   const googleArticles = articles.filter(
-    (a) => !a.image && a.url.includes('news.google.com/')
+    (a) => a.url.includes('news.google.com/')
   );
   if (googleArticles.length === 0) return;
 
@@ -448,4 +450,61 @@ async function fetchAllSources() {
   return filtered;
 }
 
-module.exports = { fetchAllSources, fetchFromSource };
+// ─── Full article text extraction (for deep summaries) ──────────
+// Fetches the actual article page and extracts readable body text.
+// This is the only way to get names, quotes, and details not in RSS snippets.
+
+function extractArticleText(html, maxLength = 4000) {
+  if (!html) return '';
+
+  // Remove scripts, styles, nav, footer, aside, form elements
+  let text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+    .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+    .replace(/<form[\s\S]*?<\/form>/gi, '')
+    .replace(/<header[\s\S]*?<\/header>/gi, '');
+
+  // Try to find article content (narrower = better signal-to-noise)
+  const articleMatch = text.match(/<article[\s\S]*?<\/article>/i);
+  const mainMatch = text.match(/<main[\s\S]*?<\/main>/i);
+  const roleMainMatch = text.match(/<[^>]+role=["']main["'][\s\S]*?<\/[^>]+>/i);
+
+  if (articleMatch) text = articleMatch[0];
+  else if (mainMatch) text = mainMatch[0];
+  else if (roleMainMatch) text = roleMainMatch[0];
+
+  // Strip all HTML tags
+  text = text.replace(/<[^>]+>/g, ' ');
+
+  // Decode HTML entities
+  text = text
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#8217;/g, "\u2019")
+    .replace(/&#8220;/g, "\u201C")
+    .replace(/&#8221;/g, "\u201D")
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return text.slice(0, maxLength);
+}
+
+async function fetchArticleText(url) {
+  try {
+    if (!url || url.includes('news.google.com/')) return '';
+    const { html } = await fetchPage(url, 8000);
+    return extractArticleText(html);
+  } catch {
+    return '';
+  }
+}
+
+module.exports = { fetchAllSources, fetchFromSource, fetchArticleText };
