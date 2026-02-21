@@ -265,6 +265,69 @@ function bundleHighSeverityEvents(events) {
   return bundles;
 }
 
+// ─── Second-level bundling: group related escalation events ──────
+// After initial dedup by subtype, group bundles that share the same
+// country + overlapping regions + at least one common actor.
+// This collapses "genocide + violence + drone_attack in Darfur" into
+// one visual escalation cluster instead of 3 separate cards.
+
+function hasSharedActors(actorsA, actorsB) {
+  if (actorsA.length === 0 || actorsB.length === 0) return false;
+  const setB = new Set(actorsB.map(a => a.toLowerCase()));
+  return actorsA.some(a => setB.has(a.toLowerCase()));
+}
+
+function groupRelatedBundles(bundles) {
+  const groups = [];
+  const used = new Set();
+
+  for (let i = 0; i < bundles.length; i++) {
+    if (used.has(i)) continue;
+
+    const primary = bundles[i];
+    const related = [];
+
+    for (let j = i + 1; j < bundles.length; j++) {
+      if (used.has(j)) continue;
+      const candidate = bundles[j];
+
+      // Same country + overlapping regions + shared actors = same escalation
+      const sameCountry = primary.country.toLowerCase() === candidate.country.toLowerCase();
+      const overlapping = regionsOverlap(primary.regions, candidate.regions);
+      const sharedActors = hasSharedActors(primary.actors, candidate.actors);
+
+      if (sameCountry && overlapping && sharedActors) {
+        related.push(candidate);
+        used.add(j);
+      }
+    }
+
+    if (related.length > 0) {
+      // Merge all regions for the group label
+      const allRegions = [...primary.regions];
+      for (const r of related) {
+        for (const reg of r.regions) {
+          if (!allRegions.some(ar => ar.toLowerCase() === reg.toLowerCase())) {
+            allRegions.push(reg);
+          }
+        }
+      }
+      groups.push({
+        type: 'escalation',
+        label: `${primary.country}${allRegions.length ? ' — ' + collapseRegions(allRegions).join(', ') : ''}`,
+        count: related.length + 1,
+        primary,
+        related,
+      });
+    } else {
+      groups.push({ type: 'standalone', primary });
+    }
+    used.add(i);
+  }
+
+  return groups;
+}
+
 // ─── Re-normalize actor counts at digest time ───────────────────
 // Old DB entries may have un-merged actors (UN vs United Nations, etc.)
 // Re-apply the canonical alias table and merge counts.
@@ -339,9 +402,10 @@ function generateDigest() {
     typeShifts,
   };
 
-  // ── Section 2: High-Severity Events (bundled) ──────────────
+  // ── Section 2: High-Severity Events (bundled, then grouped) ──
   const rawHighSev = twEvents.filter((e) => e.severity >= 4);
-  const highSeverity = bundleHighSeverityEvents(rawHighSev).slice(0, 8);
+  const highSeverity = bundleHighSeverityEvents(rawHighSev).slice(0, 10);
+  const highSeverityGroups = groupRelatedBundles(highSeverity);
 
   // ── Section 3: Hot Regions ────────────────────────────────
   const lwRegionMap = Object.fromEntries(lwRegions.map((r) => [r.region, r]));
@@ -377,6 +441,7 @@ function generateDigest() {
     period: { thisWeek: thisWeek.label, lastWeek: lastWeek.label },
     topline,
     highSeverity,
+    highSeverityGroups,
     hotRegions,
     actorSpikes,
     dataPoints: {
@@ -506,33 +571,51 @@ a:hover { color: #8AAAC0; }
     }
   }
 
-  // Section 2: High-Severity Events
+  // Section 2: High-Severity Events (grouped by escalation)
   html += '<h2>High-Severity Events</h2>';
-  if (d.highSeverity.length === 0) {
+  if (d.highSeverityGroups.length === 0) {
     html += '<div style="color:#4A4A54; font-size:12px; padding:12px 0">No severity 4-5 events this period.</div>';
   }
-  for (const e of d.highSeverity) {
-    const sev = SEV_COLORS[e.severity] || SEV_COLORS[3];
-    html += `<div class="event-card" style="border-color:${sev.border}">`;
-    html += `<div class="ev-summary">${escHTML(e.summary)}</div>`;
 
-    // Stacked meta — severity badge, type badge, location, verification
-    html += '<div class="ev-meta-stack">';
-    html += `<span class="badge" style="background:${sev.badge};color:${sev.badgeText}">${SEV_LABELS[e.severity] || 'SEV ' + e.severity}</span>`;
-    html += `<span class="badge" style="background:#1A1A2A;color:#7A8AAA">${e.eventType}${e.eventSubtype ? ' / ' + e.eventSubtype : ''}</span>`;
-    const regionDisplay = e.regions.length ? collapseRegions(e.regions).join(', ') : '';
-    html += `<span class="ev-location">${e.country}${regionDisplay ? ' — ' + regionDisplay : ''}</span>`;
-    html += `<span class="ev-verification">${e.verificationStatus}</span>`;
-    if (e.primaryUrl) html += `<span class="ev-source-link"><a href="${escHTML(e.primaryUrl)}">source</a></span>`;
-    html += '</div>';
+  function renderEventCard(e, compact) {
+    const sev = SEV_COLORS[e.severity] || SEV_COLORS[3];
+    let card = `<div class="event-card" style="border-color:${sev.border}${compact ? ';padding:14px 18px;margin-bottom:10px' : ''}">`;
+    card += `<div class="ev-summary" ${compact ? 'style="font-size:13px;margin-bottom:8px"' : ''}>${escHTML(e.summary)}</div>`;
+
+    card += '<div class="ev-meta-stack">';
+    card += `<span class="badge" style="background:${sev.badge};color:${sev.badgeText}">${SEV_LABELS[e.severity] || 'SEV ' + e.severity}</span>`;
+    card += `<span class="badge" style="background:#1A1A2A;color:#7A8AAA">${e.eventType}${e.eventSubtype ? ' / ' + e.eventSubtype : ''}</span>`;
+    if (!compact) {
+      const regionDisplay = e.regions.length ? collapseRegions(e.regions).join(', ') : '';
+      card += `<span class="ev-location">${e.country}${regionDisplay ? ' — ' + regionDisplay : ''}</span>`;
+    }
+    card += `<span class="ev-verification">${e.verificationStatus}</span>`;
+    if (e.primaryUrl) card += `<span class="ev-source-link"><a href="${escHTML(e.primaryUrl)}">source</a></span>`;
+    card += '</div>';
 
     if (e.sourceCount > 1) {
-      html += `<div class="ev-sources">${e.sourceCount} articles across ${e.sources.length} sources: ${e.sources.join(', ')}</div>`;
+      card += `<div class="ev-sources">${e.sourceCount} articles across ${e.sources.length} sources: ${e.sources.join(', ')}</div>`;
     }
     if (e.rationale) {
-      html += `<div class="ev-rationale">${escHTML(e.rationale)}</div>`;
+      card += `<div class="ev-rationale">${escHTML(e.rationale)}</div>`;
     }
-    html += '</div>';
+    card += '</div>';
+    return card;
+  }
+
+  for (const group of d.highSeverityGroups) {
+    if (group.type === 'standalone') {
+      html += renderEventCard(group.primary, false);
+    } else {
+      // Escalation cluster — group header + primary + related
+      html += `<div style="border-left:2px solid #2A2A34;padding-left:16px;margin-bottom:22px">`;
+      html += `<div style="font-size:11px;color:#6A6A74;letter-spacing:0.3px;margin-bottom:10px;text-transform:uppercase">Escalation cluster — ${escHTML(group.label)} — ${group.count} developments</div>`;
+      html += renderEventCard(group.primary, false);
+      for (const r of group.related) {
+        html += renderEventCard(r, true);
+      }
+      html += '</div>';
+    }
   }
 
   // Section 3: Hot Regions
@@ -606,16 +689,31 @@ function renderDigestText(digest) {
   }
 
   text += '\nHIGH-SEVERITY EVENTS\n';
-  if (d.highSeverity.length === 0) {
+  if (d.highSeverityGroups.length === 0) {
     text += '  (none this week)\n';
   }
-  for (const e of d.highSeverity) {
-    text += `  [${SEV_LABELS[e.severity] || 'SEV ' + e.severity}] ${e.summary}\n`;
-    text += `    ${e.country}${e.regions.length ? ' / ' + collapseRegions(e.regions).join(', ') : ''} | ${e.verificationStatus}`;
-    if (e.sourceCount > 1) text += ` | ${e.sourceCount} articles`;
-    text += '\n';
-    if (e.rationale) text += `    ${e.rationale}\n`;
-    text += '\n';
+
+  function renderEventText(e, indent) {
+    let t = '';
+    t += `${indent}[${SEV_LABELS[e.severity] || 'SEV ' + e.severity}] ${e.summary}\n`;
+    t += `${indent}  ${e.country}${e.regions.length ? ' / ' + collapseRegions(e.regions).join(', ') : ''} | ${e.verificationStatus}`;
+    if (e.sourceCount > 1) t += ` | ${e.sourceCount} articles`;
+    t += '\n';
+    if (e.rationale) t += `${indent}  ${e.rationale}\n`;
+    t += '\n';
+    return t;
+  }
+
+  for (const group of d.highSeverityGroups) {
+    if (group.type === 'standalone') {
+      text += renderEventText(group.primary, '  ');
+    } else {
+      text += `  ESCALATION: ${group.label} — ${group.count} developments\n`;
+      text += renderEventText(group.primary, '    ');
+      for (const r of group.related) {
+        text += renderEventText(r, '    ');
+      }
+    }
   }
 
   text += 'HOT REGIONS\n';
