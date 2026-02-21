@@ -1,4 +1,5 @@
 const Parser = require('rss-parser');
+const GoogleNewsDecoder = require('google-news-decoder');
 const sources = require('./sources');
 
 const BROWSER_UA =
@@ -261,10 +262,10 @@ function extractOgImage(html) {
   return null;
 }
 
-// ─── Google News batchexecute API decoder ───────────────────────
-// Modern Google News URLs use encrypted protobuf that can't be decoded
-// locally. The only reliable approach is Google's internal batchexecute
-// API (DotsSplashUi/data/batchexecute) with the "Fbv4je" RPC method.
+// ─── Google News URL decoder (via google-news-decoder package) ──
+// Two-step process: 1) fetch article page to get signature + timestamp
+// from embedded data attributes, 2) call batchexecute with those params.
+const gnDecoder = new GoogleNewsDecoder();
 
 async function fetchPage(url, timeout = 8000) {
   const controller = new AbortController();
@@ -275,116 +276,19 @@ async function fetchPage(url, timeout = 8000) {
       'User-Agent': BROWSER_UA,
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
-      'Cache-Control': 'no-cache',
       Referer: 'https://news.google.com/',
     },
     redirect: 'follow',
   });
   clearTimeout(timeoutId);
-  if (!res.ok) return { html: null, finalUrl: res.url, status: res.status };
+  if (!res.ok) return { html: null, finalUrl: res.url };
   const html = await res.text();
-  return { html, finalUrl: res.url, status: res.status };
-}
-
-let _batchDiagLogged = false;
-
-async function decodeGoogleNewsArticle(articleUrl) {
-  const idMatch = articleUrl.match(/\/articles\/([A-Za-z0-9_-]+)/);
-  if (!idMatch) return null;
-  const articleId = idMatch[1];
-
-  // Try multiple payload formats — Google changes these periodically
-  const formats = [
-    // Format A: Simplest — just article ID in double-nested array (google-news-decoder v2)
-    ['garturlreq', [[articleId]]],
-    // Format B: With language/country wrapper
-    ['garturlreq', [[['en-US', 'US', [articleId]]]]],
-    // Format C: Full URL as ID
-    ['garturlreq', [[articleUrl]]],
-  ];
-
-  for (let f = 0; f < formats.length; f++) {
-    const innerPayload = formats[f];
-    const outerPayload = [[['Fbv4je', JSON.stringify(innerPayload), null, 'generic']]];
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-    try {
-      const res = await fetch('https://news.google.com/_/DotsSplashUi/data/batchexecute', {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-          'User-Agent': BROWSER_UA,
-          Referer: 'https://news.google.com/',
-        },
-        body: new URLSearchParams({ 'f.req': JSON.stringify(outerPayload) }).toString(),
-      });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) continue;
-
-      const text = await res.text();
-
-      // Diagnostic: log first response for each format attempted
-      if (!_batchDiagLogged) {
-        _batchDiagLogged = true;
-        console.log(`  [GN batch] Format ${f} response (${text.length} bytes): ${text.slice(0, 300)}`);
-      }
-
-      // Check for error code [3] = INVALID_ARGUMENT — try next format
-      if (text.includes(',null,null,null,[3],')) continue;
-
-      // Try to extract URL from response
-      const url = extractUrlFromBatchResponse(text);
-      if (url) {
-        // Log success on first decode
-        if (!decodeGoogleNewsArticle._successLogged) {
-          decodeGoogleNewsArticle._successLogged = true;
-          console.log(`  [GN batch] Format ${f} worked! Sample: ${url.slice(0, 80)}`);
-        }
-        return url;
-      }
-    } catch {
-      clearTimeout(timeoutId);
-      continue;
-    }
-  }
-
-  return null;
-}
-decodeGoogleNewsArticle._successLogged = false;
-
-function extractUrlFromBatchResponse(text) {
-  // Response format: )]}'\n<length>\n[JSON with nested arrays]
-  // URL can appear in multiple formats
-  const patterns = [
-    /https?:\\u002F\\u002F[^"\\]+/g,     // Unicode-escaped
-    /https?:\\\/\\\/[^"\\]+/g,             // Backslash-escaped
-    /https?:\/\/[^\s"\\,\]\)]+/g,         // Plain
-  ];
-
-  for (const pattern of patterns) {
-    const matches = text.match(pattern);
-    if (!matches) continue;
-    for (const raw of matches) {
-      const clean = raw
-        .replace(/\\u002F/g, '/')
-        .replace(/\\\//g, '/')
-        .replace(/\\"/g, '');
-      if (!clean.includes('google.com') && !clean.includes('gstatic.com') &&
-          !clean.includes('googleapis.com') && /^https?:\/\/[a-z0-9]/.test(clean)) {
-        return clean;
-      }
-    }
-  }
-  return null;
+  return { html, finalUrl: res.url };
 }
 
 async function scrapeOgImage(articleUrl) {
   try {
-    if (articleUrl.includes('news.google.com/')) return null; // Can't scrape Google SPA
+    if (articleUrl.includes('news.google.com/')) return null;
     const { html } = await fetchPage(articleUrl);
     if (!html) return null;
     return extractOgImage(html);
@@ -393,7 +297,10 @@ async function scrapeOgImage(articleUrl) {
   }
 }
 
-// ─── Async Google News URL resolution (via batchexecute API) ────
+// ─── Async Google News URL resolution (via google-news-decoder) ──
+// Uses the google-news-decoder package which:
+// 1. Fetches article page to extract data-n-a-sg (signature) + data-n-a-ts (timestamp)
+// 2. Calls batchexecute with those auth params to get the real publisher URL
 
 async function resolveGoogleRedirects(articles) {
   const googleArticles = articles.filter(
@@ -401,42 +308,51 @@ async function resolveGoogleRedirects(articles) {
   );
   if (googleArticles.length === 0) return;
 
-  console.log(`Decoding ${googleArticles.length} Google News URLs via batchexecute API...`);
+  console.log(`Decoding ${googleArticles.length} Google News URLs via google-news-decoder...`);
 
-  const BATCH_SIZE = 5; // Smaller batches to avoid rate limiting
+  // Process sequentially in small batches — each decode makes 2 HTTP requests
+  const BATCH_SIZE = 3;
   let resolved = 0;
   let errors = 0;
+  let firstError = '';
   let diagLogged = false;
 
   for (let i = 0; i < googleArticles.length; i += BATCH_SIZE) {
     const batch = googleArticles.slice(i, i + BATCH_SIZE);
     const results = await Promise.allSettled(
-      batch.map((a) => decodeGoogleNewsArticle(a.url))
+      batch.map(async (a) => {
+        try {
+          const result = await gnDecoder.decodeGoogleNewsUrl(a.url);
+          if (result.status && result.decodedUrl) return result.decodedUrl;
+          return null;
+        } catch (err) {
+          if (!firstError) firstError = err.message;
+          return null;
+        }
+      })
     );
     results.forEach((r, j) => {
       if (r.status === 'fulfilled' && r.value) {
-        // One-time diagnostic
         if (!diagLogged) {
           diagLogged = true;
-          console.log(`  [GN decode] Sample: ${batch[j].url.slice(0, 60)}... => ${r.value.slice(0, 80)}`);
+          console.log(`  [GN decode] ${batch[j].url.slice(0, 60)}... => ${r.value.slice(0, 80)}`);
         }
         batch[j].url = r.value;
         resolved++;
       } else {
         errors++;
-        if (!diagLogged && r.status === 'rejected') {
-          diagLogged = true;
-          console.log(`  [GN decode] First error: ${r.reason?.message || 'unknown'}`);
-        }
       }
     });
 
-    // Small delay between batches to avoid rate limiting
+    // Rate limit: 500ms between batches (each batch makes 2 * BATCH_SIZE requests)
     if (i + BATCH_SIZE < googleArticles.length) {
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
 
+  if (firstError && resolved === 0) {
+    console.log(`  [GN decode] First error: ${firstError}`);
+  }
   console.log(`Decoded ${resolved}/${googleArticles.length} Google News URLs (${errors} failed)`);
 }
 
