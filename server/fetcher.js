@@ -150,28 +150,58 @@ function isRelevantArticle(article) {
 // Google News RSS items use encoded redirect URLs. The real article URL
 // is extractable from the description HTML or from decoding the URL.
 
+let _gnDiagLogged = false; // Log diagnostic for first Google News item only
+
 function resolveGoogleNewsUrl(item) {
   const link = item.link || '';
   if (!link.includes('news.google.com/')) return link;
 
-  // Method 1: Extract real URL from description HTML
+  // One-time diagnostic: show what data rss-parser gives us for Google News items
+  if (!_gnDiagLogged) {
+    _gnDiagLogged = true;
+    console.log(`  [GN diagnostic] link: ${link.slice(0, 100)}...`);
+    console.log(`  [GN diagnostic] item.content length: ${(item.content || '').length}, has <a: ${/<a\s/i.test(item.content || '')}`);
+    console.log(`  [GN diagnostic] item.summary length: ${(item.summary || '').length}`);
+    console.log(`  [GN diagnostic] item.description: ${typeof item.description}, length: ${(item.description || '').length}`);
+    console.log(`  [GN diagnostic] item.content first 300: ${(item.content || '').slice(0, 300)}`);
+    // Check for source field (Google News RSS has <source url="...">)
+    console.log(`  [GN diagnostic] item.source: ${JSON.stringify(item.source || null)}`);
+    console.log(`  [GN diagnostic] item.sourceUrl: ${item.sourceUrl || 'n/a'}`);
+  }
+
+  // Method 1: Extract real URL from description/content HTML
   // Google News RSS descriptions contain: <a href="https://real-url.com">Title</a>
-  const desc = item.description || item.content || '';
-  const hrefMatch = desc.match(/<a[^>]+href=["']([^"']+)["']/i);
-  if (hrefMatch && hrefMatch[1] && !hrefMatch[1].includes('news.google.com')) {
-    return hrefMatch[1];
+  const htmlSources = [item.content, item.description, item.summary, item['content:encoded']];
+  for (const html of htmlSources) {
+    if (!html) continue;
+    const hrefMatch = html.match(/<a[^>]+href=["']([^"']+)["']/i);
+    if (hrefMatch && hrefMatch[1] && !hrefMatch[1].includes('news.google.com')) {
+      return hrefMatch[1];
+    }
   }
 
   // Method 2: Decode from Google News URL path (Base64-encoded protobuf)
+  // Scan decoded bytes for "http" pattern instead of relying on string matching
   try {
     const pathMatch = link.match(/\/articles\/([A-Za-z0-9_-]+)/);
     if (pathMatch) {
       let encoded = pathMatch[1].replace(/-/g, '+').replace(/_/g, '/');
       while (encoded.length % 4) encoded += '=';
-      const decoded = Buffer.from(encoded, 'base64').toString('latin1');
-      // Match only printable ASCII to avoid protobuf garbage bytes
-      const urlMatch = decoded.match(/https?:\/\/[\x21-\x7e]+/);
-      if (urlMatch) return urlMatch[0];
+      const bytes = Buffer.from(encoded, 'base64');
+
+      // Scan for "http" (0x68 0x74 0x74 0x70) in the raw bytes
+      for (let i = 0; i < bytes.length - 10; i++) {
+        if (bytes[i] === 0x68 && bytes[i + 1] === 0x74 && bytes[i + 2] === 0x74 && bytes[i + 3] === 0x70) {
+          // Found "http" — read until non-URL byte
+          let end = i;
+          while (end < bytes.length && bytes[end] >= 0x21 && bytes[end] <= 0x7e) end++;
+          const candidate = bytes.slice(i, end).toString('utf8');
+          // Validate it looks like a real URL (not google.com redirect)
+          if (/^https?:\/\/[a-z0-9]/.test(candidate) && !candidate.includes('news.google.com')) {
+            return candidate;
+          }
+        }
+      }
     }
   } catch {}
 
@@ -269,13 +299,19 @@ async function fetchPage(url, timeout = 8000) {
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   const res = await fetch(url, {
     signal: controller.signal,
-    headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html' },
+    headers: {
+      'User-Agent': BROWSER_UA,
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      Referer: 'https://news.google.com/',
+    },
     redirect: 'follow',
   });
   clearTimeout(timeoutId);
-  if (!res.ok) return { html: null, finalUrl: res.url };
+  if (!res.ok) return { html: null, finalUrl: res.url, status: res.status };
   const html = await res.text();
-  return { html, finalUrl: res.url };
+  return { html, finalUrl: res.url, status: res.status };
 }
 
 async function scrapeOgImage(articleUrl) {
@@ -314,13 +350,23 @@ async function resolveGoogleRedirects(articles) {
 
   const BATCH_SIZE = 10;
   let resolved = 0;
+  let diagLogged = false;
 
   for (let i = 0; i < googleArticles.length; i += BATCH_SIZE) {
     const batch = googleArticles.slice(i, i + BATCH_SIZE);
     const results = await Promise.allSettled(
       batch.map(async (a) => {
         try {
-          const { html, finalUrl } = await fetchPage(a.url, 6000);
+          const { html, finalUrl, status } = await fetchPage(a.url, 6000);
+
+          // Diagnostic: log details of first attempt
+          if (!diagLogged) {
+            diagLogged = true;
+            console.log(`  [GN redirect diag] URL: ${a.url.slice(0, 80)}...`);
+            console.log(`  [GN redirect diag] HTTP status: ${status}, finalUrl: ${(finalUrl || '').slice(0, 100)}`);
+            console.log(`  [GN redirect diag] HTML length: ${(html || '').length}`);
+            console.log(`  [GN redirect diag] HTML first 500: ${(html || '').slice(0, 500)}`);
+          }
 
           // If HTTP redirect already resolved it
           if (finalUrl && !finalUrl.includes('google.com')) return finalUrl;
@@ -331,7 +377,11 @@ async function resolveGoogleRedirects(articles) {
             if (realUrl) return realUrl;
           }
           return null;
-        } catch {
+        } catch (err) {
+          if (!diagLogged) {
+            diagLogged = true;
+            console.log(`  [GN redirect diag] ERROR: ${err.message}`);
+          }
           return null;
         }
       })
