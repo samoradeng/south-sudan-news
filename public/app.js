@@ -173,18 +173,40 @@ function renderStories() {
   loadingEl.style.display = 'none';
   errorEl.style.display = 'none';
 
-  // Build: hero card + grid of regular cards
+  // 3-tier layout: hero → featured (severity ≥ 3) → compact grid
   const hero = filtered[0];
   const heroIndex = allClusters.indexOf(hero);
   const rest = filtered.slice(1);
 
+  // Featured: next stories with severity ≥ 3 (up to 2)
+  const featured = [];
+  const compact = [];
+  for (const c of rest) {
+    if (featured.length < 2 && c.event && c.event.severity >= 3) {
+      featured.push(c);
+    } else {
+      compact.push(c);
+    }
+  }
+
   let html = createHeroCard(hero, heroIndex);
 
-  if (rest.length > 0) {
-    html += '<div class="stories-grid-regular">';
-    rest.forEach((cluster) => {
+  // Featured row (horizontal cards)
+  if (featured.length > 0) {
+    html += '<div class="stories-grid-featured">';
+    featured.forEach((cluster) => {
       const idx = allClusters.indexOf(cluster);
-      html += createRegularCard(cluster, idx);
+      html += createFeaturedCard(cluster, idx);
+    });
+    html += '</div>';
+  }
+
+  // Compact grid (smaller cards)
+  if (compact.length > 0) {
+    html += '<div class="stories-grid-compact">';
+    compact.forEach((cluster) => {
+      const idx = allClusters.indexOf(cluster);
+      html += createCompactCard(cluster, idx);
     });
     html += '</div>';
   }
@@ -194,7 +216,6 @@ function renderStories() {
   // Attach click handlers
   storiesEl.querySelectorAll('[data-story-index]').forEach((el) => {
     el.addEventListener('click', (e) => {
-      // Don't intercept link clicks
       if (e.target.closest('a')) return;
       const idx = parseInt(el.dataset.storyIndex);
       openStory(idx);
@@ -302,6 +323,72 @@ function createRegularCard(cluster, index) {
             ${event ? buildVerificationBadge(event.verificationStatus) : ''}
             <span class="story-time">${timeAgo}</span>
           </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function createFeaturedCard(cluster, index) {
+  const primary = cluster.primaryArticle;
+  const timeAgo = formatTimeAgo(new Date(cluster.latestDate));
+  const event = cluster.event;
+  const sevClass = event ? `severity-${event.severity}` : '';
+
+  const imageHtml = cluster.image
+    ? `<div class="featured-image-wrap">
+        <img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.style.display='none'">
+      </div>`
+    : `<div class="featured-image-wrap">${buildPlaceholder(cluster, 180)}</div>`;
+
+  const intelTagsHtml = buildIntelTags(event, true);
+
+  return `
+    <div class="story-card featured ${sevClass}" data-story-index="${index}">
+      ${imageHtml}
+      <div class="featured-body">
+        <h3 class="story-title">${esc(primary.title)}</h3>
+        ${cluster.summary ? `<p class="story-summary">${esc(cluster.summary)}</p>` : ''}
+        ${intelTagsHtml}
+        <div class="story-meta">
+          <div class="story-sources-row">
+            ${event && event.severity >= 3 ? `<span class="severity-dot sev-${event.severity}"></span>` : ''}
+            <span class="source-count-badge">${cluster.sourceCount} source${cluster.sourceCount !== 1 ? 's' : ''}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            ${event ? buildVerificationBadge(event.verificationStatus) : ''}
+            <span class="story-time">${timeAgo}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function createCompactCard(cluster, index) {
+  const primary = cluster.primaryArticle;
+  const timeAgo = formatTimeAgo(new Date(cluster.latestDate));
+  const event = cluster.event;
+  const sevClass = event ? `severity-${event.severity}` : '';
+
+  const imageHtml = cluster.image
+    ? `<div class="compact-image-wrap">
+        <img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.style.display='none'">
+      </div>`
+    : `<div class="compact-image-wrap">${buildPlaceholder(cluster, 120)}</div>`;
+
+  return `
+    <div class="story-card compact ${sevClass}" data-story-index="${index}">
+      ${imageHtml}
+      <div class="compact-body">
+        <h3 class="story-title">${esc(primary.title)}</h3>
+        <div class="story-meta">
+          <div class="story-sources-row">
+            ${event && event.severity >= 3 ? `<span class="severity-dot sev-${event.severity}"></span>` : ''}
+            ${event ? buildVerificationBadge(event.verificationStatus) : ''}
+            <span class="source-count-badge">${cluster.sourceCount}s</span>
+          </div>
+          <span class="story-time">${timeAgo}</span>
         </div>
       </div>
     </div>
