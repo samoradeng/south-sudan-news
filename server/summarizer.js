@@ -146,11 +146,14 @@ Format your response EXACTLY like this — use ## for section headings:
 Rules:
 - Write 3-5 sections with descriptive, specific headings (NOT generic like "Background" or "Conclusion")
 - Use **bold** liberally for key names, numbers, organizations, places, and important facts
+- ALWAYS identify people by their FULL NAME, title/role, and affiliation when mentioned in any article
+- If this is a profile, interview, or Q&A article, the primary subject's full name and role MUST appear prominently in the first section
 - Cite article numbers at the end of each paragraph using {N} or {N,M} format
 - Each section should be 1-2 substantial paragraphs
 - Synthesize across sources — don't just repeat each article
 - Be factual and journalistic — no editorializing
-- Include specific details: names, dates, numbers, quotes when available`,
+- Include specific details: names, dates, numbers, locations, quotes when available
+- Never say "the article discusses" or "an artist" — use actual names from the articles`,
         },
         {
           role: 'user',
@@ -261,16 +264,24 @@ function fallbackDeepSummary(cluster) {
 
 // ─── Follow-up question answering ─────────────────────────────
 
-async function answerFollowUp(cluster, question) {
+async function answerFollowUp(cluster, question, deepSummary) {
   if (!groqClient) {
     return 'AI follow-up questions require a Groq API key. Add GROQ_API_KEY to your .env file.';
   }
 
   try {
     const articles = cluster.articles.slice(0, 5);
-    const context = articles
+    let context = articles
       .map((a) => `[${a.source}] ${a.title}\n${a.description}`)
       .join('\n\n');
+
+    // Include deep summary for richer context (has synthesized names, details)
+    if (deepSummary && deepSummary.sections) {
+      context += '\n\n--- Analysis ---\n';
+      context += deepSummary.sections
+        .map((s) => `${s.heading}\n${s.content}`)
+        .join('\n\n');
+    }
 
     const response = await callGroqWithRetry({
       model: 'llama-3.3-70b-versatile',
@@ -278,7 +289,7 @@ async function answerFollowUp(cluster, question) {
         {
           role: 'system',
           content:
-            'You are a helpful news analyst specializing in South Sudan. Answer questions based on the provided articles. Be concise and factual. Use **bold** for key facts. If the articles don\'t contain enough information, say so honestly.',
+            'You are a helpful news analyst specializing in South Sudan and the Horn of Africa. Answer questions based ONLY on the provided articles and analysis. Be concise and factual. Use **bold** for key facts — especially names, dates, and figures. Always use specific names (never say "the artist" or "the official" if a name is available). If the provided text does not contain enough information to answer, say: "This detail isn\'t available in the source articles — check the original source for more."',
         },
         {
           role: 'user',

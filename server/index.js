@@ -239,7 +239,11 @@ app.post('/api/followup', aiLimiter, async (req, res) => {
     }
 
     const cluster = enriched[storyIndex];
-    const answer = await answerFollowUp(cluster, question);
+
+    // Include deep summary for richer follow-up context
+    const deepKey = `deep-${cluster.primaryArticle.title.slice(0, 50)}`;
+    const cachedDeep = cache.get(deepKey);
+    const answer = await answerFollowUp(cluster, question, cachedDeep?.deepSummary);
 
     res.json({ answer });
   } catch (err) {
