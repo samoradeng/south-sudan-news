@@ -121,11 +121,27 @@ async function deepSummarizeCluster(cluster) {
 
   try {
     const articles = cluster.articles.slice(0, 6);
+
+    // Fetch full article text for the primary article (has names, quotes, details not in RSS)
+    let fullText = '';
+    try {
+      const { fetchArticleText } = require('./fetcher');
+      fullText = await fetchArticleText(cluster.primaryArticle.url);
+      if (fullText) {
+        console.log(`  Fetched ${fullText.length} chars of article text from ${cluster.primaryArticle.url.slice(0, 60)}...`);
+      }
+    } catch (err) {
+      console.debug(`  Could not fetch article text: ${err.message}`);
+    }
+
     const articlesText = articles
-      .map(
-        (a, i) =>
-          `Article ${i + 1} [${a.source}]:\nTitle: ${a.title}\n${a.description}`
-      )
+      .map((a, i) => {
+        let text = `Article ${i + 1} [${a.source}]:\nTitle: ${a.title}\n${a.description}`;
+        if (i === 0 && fullText) {
+          text += `\n\nFull article text:\n${fullText}`;
+        }
+        return text;
+      })
       .join('\n\n---\n\n');
 
     const response = await callGroqWithRetry({
