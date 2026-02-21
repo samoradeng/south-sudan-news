@@ -160,6 +160,32 @@ function renderStories() {
   });
 }
 
+// Category-based placeholder colors for cards without images
+const PLACEHOLDER_THEMES = {
+  security:      { bg: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)', accent: '#e94560', icon: '\u26A0' },
+  humanitarian:  { bg: 'linear-gradient(135deg, #1a1a2e 0%, #1e2d3d 50%, #1a3a4a 100%)', accent: '#4ecdc4', icon: '\u2764' },
+  political:     { bg: 'linear-gradient(135deg, #1a1a2e 0%, #2d1f3d 50%, #3a1a4a 100%)', accent: '#9b59b6', icon: '\u2691' },
+  economic:      { bg: 'linear-gradient(135deg, #1a1a2e 0%, #2d2d1f 50%, #4a4a1a 100%)', accent: '#f39c12', icon: '\u25B2' },
+  general:       { bg: 'linear-gradient(135deg, #1e293b 0%, #334155 50%, #1e293b 100%)', accent: '#64748b', icon: '\u25CF' },
+  legal:         { bg: 'linear-gradient(135deg, #1a1a2e 0%, #1f2d3d 50%, #1a3a4a 100%)', accent: '#3498db', icon: '\u2696' },
+  infrastructure:{ bg: 'linear-gradient(135deg, #1a1a2e 0%, #2d2d1f 50%, #3a3a1a 100%)', accent: '#e67e22', icon: '\u2302' },
+};
+
+function buildPlaceholder(cluster, height) {
+  const category = cluster.category || 'general';
+  const theme = PLACEHOLDER_THEMES[category] || PLACEHOLDER_THEMES.general;
+  const primary = cluster.primaryArticle;
+  const domain = getDomain(primary.url);
+  return `<div style="width:100%;height:${height}px;background:${theme.bg};display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden">
+    <span style="font-size:${height > 200 ? 48 : 36}px;opacity:0.12;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">${theme.icon}</span>
+    <div style="position:absolute;bottom:12px;left:16px;display:flex;align-items:center;gap:8px">
+      ${domain ? `<img src="https://www.google.com/s2/favicons?domain=${esc(domain)}&sz=16" alt="" style="opacity:0.6" onerror="this.style.display='none'">` : ''}
+      <span style="font-size:11px;color:rgba(255,255,255,0.4);letter-spacing:0.5px;text-transform:uppercase">${esc(primary.source)}</span>
+    </div>
+    <span style="position:absolute;top:12px;right:16px;font-size:10px;padding:2px 8px;border-radius:3px;background:${theme.accent};color:rgba(0,0,0,0.7);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${esc(category)}</span>
+  </div>`;
+}
+
 function createHeroCard(cluster, index) {
   const primary = cluster.primaryArticle;
   const timeAgo = formatTimeAgo(new Date(cluster.latestDate));
@@ -167,10 +193,10 @@ function createHeroCard(cluster, index) {
 
   const imageHtml = cluster.image
     ? `<div class="hero-image-wrap">
-        <img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+        <img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.style.display='none'">
         <span class="hero-image-source">${esc(primary.source)}</span>
       </div>`
-    : '';
+    : `<div class="hero-image-wrap">${buildPlaceholder(cluster, 320)}</div>`;
 
   const sourcesHtml = buildSourceFavicons(cluster.articles, 4);
 
@@ -202,9 +228,9 @@ function createRegularCard(cluster, index) {
 
   const imageHtml = cluster.image
     ? `<div class="card-image-wrap">
-        <img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'">
+        <img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.style.display='none'">
       </div>`
-    : '';
+    : `<div class="card-image-wrap">${buildPlaceholder(cluster, 180)}</div>`;
 
   const sourcesHtml = buildSourceFavicons(cluster.articles, 3);
 
@@ -417,7 +443,7 @@ function renderDiscoverMore(currentIndex) {
 
       const imgHtml = cluster.image
         ? `<div class="related-card-image"><img src="${esc(cluster.image)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'"></div>`
-        : '';
+        : `<div class="related-card-image">${buildPlaceholder(cluster, 100)}</div>`;
 
       return `
         <div class="related-card" data-related-index="${index}">
