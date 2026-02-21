@@ -293,62 +293,76 @@ async function decodeGoogleNewsArticle(articleUrl) {
   if (!idMatch) return null;
   const articleId = idMatch[1];
 
-  // Build the batchexecute payload
-  // Inner: ["garturlreq", [["en-US", "US", [articleId]], null x30]]
-  const innerPayload = ['garturlreq', [[['en-US', 'US', [articleId]],
-    ...new Array(30).fill(null)]]];
-  const outerPayload = [[['Fbv4je', JSON.stringify(innerPayload), null, 'generic']]];
-  const bodyStr = `f.req=${encodeURIComponent(JSON.stringify(outerPayload))}`;
+  // Try multiple payload formats — Google changes these periodically
+  const formats = [
+    // Format A: Simplest — just article ID in double-nested array (google-news-decoder v2)
+    ['garturlreq', [[articleId]]],
+    // Format B: With language/country wrapper
+    ['garturlreq', [[['en-US', 'US', [articleId]]]]],
+    // Format C: Full URL as ID
+    ['garturlreq', [[articleUrl]]],
+  ];
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  for (let f = 0; f < formats.length; f++) {
+    const innerPayload = formats[f];
+    const outerPayload = [[['Fbv4je', JSON.stringify(innerPayload), null, 'generic']]];
 
-  const res = await fetch('https://news.google.com/_/DotsSplashUi/data/batchexecute', {
-    method: 'POST',
-    signal: controller.signal,
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-      'User-Agent': BROWSER_UA,
-      Referer: 'https://news.google.com/',
-    },
-    body: bodyStr,
-  });
-  clearTimeout(timeoutId);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-  // Diagnostic: log first response details
-  if (!_batchDiagLogged) {
-    _batchDiagLogged = true;
-    console.log(`  [GN batch diag] HTTP status: ${res.status}`);
-    console.log(`  [GN batch diag] Article ID length: ${articleId.length}`);
-    console.log(`  [GN batch diag] Body length: ${bodyStr.length}`);
+    try {
+      const res = await fetch('https://news.google.com/_/DotsSplashUi/data/batchexecute', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          'User-Agent': BROWSER_UA,
+          Referer: 'https://news.google.com/',
+        },
+        body: new URLSearchParams({ 'f.req': JSON.stringify(outerPayload) }).toString(),
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) continue;
+
+      const text = await res.text();
+
+      // Diagnostic: log first response for each format attempted
+      if (!_batchDiagLogged) {
+        _batchDiagLogged = true;
+        console.log(`  [GN batch] Format ${f} response (${text.length} bytes): ${text.slice(0, 300)}`);
+      }
+
+      // Check for error code [3] = INVALID_ARGUMENT — try next format
+      if (text.includes(',null,null,null,[3],')) continue;
+
+      // Try to extract URL from response
+      const url = extractUrlFromBatchResponse(text);
+      if (url) {
+        // Log success on first decode
+        if (!decodeGoogleNewsArticle._successLogged) {
+          decodeGoogleNewsArticle._successLogged = true;
+          console.log(`  [GN batch] Format ${f} worked! Sample: ${url.slice(0, 80)}`);
+        }
+        return url;
+      }
+    } catch {
+      clearTimeout(timeoutId);
+      continue;
+    }
   }
 
-  if (!res.ok) {
-    if (!_batchDiagLogged) console.log(`  [GN batch diag] Non-OK status: ${res.status}`);
-    return null;
-  }
+  return null;
+}
+decodeGoogleNewsArticle._successLogged = false;
 
-  const text = await res.text();
-
-  // Diagnostic: log first response body
-  if (_batchDiagLogged && !decodeGoogleNewsArticle._bodyLogged) {
-    decodeGoogleNewsArticle._bodyLogged = true;
-    console.log(`  [GN batch diag] Response length: ${text.length}`);
-    console.log(`  [GN batch diag] Response first 500: ${text.slice(0, 500)}`);
-    // Also check for escaped URLs
-    const escaped = text.match(/https?:\\u002F\\u002F[^"]+/g);
-    const slashed = text.match(/https?:\\\/\\\/[^"]+/g);
-    const plain = text.match(/https?:\/\/[^\s"\\,\]\)]+/g);
-    console.log(`  [GN batch diag] URL patterns found: plain=${(plain || []).length}, escaped=${(escaped || []).length}, slashed=${(slashed || []).length}`);
-    if (plain) console.log(`  [GN batch diag] First 3 URLs: ${plain.slice(0, 3).join(' | ')}`);
-  }
-
-  // Response format: )]}'\n<length>\n[JSON with nested arrays containing the URL]
-  // Try multiple URL patterns
+function extractUrlFromBatchResponse(text) {
+  // Response format: )]}'\n<length>\n[JSON with nested arrays]
+  // URL can appear in multiple formats
   const patterns = [
-    /https?:\\u002F\\u002F[^"\\]+/g,     // Unicode-escaped slashes
-    /https?:\\\/\\\/[^"\\]+/g,             // Backslash-escaped slashes
-    /https?:\/\/[^\s"\\,\]\)]+/g,         // Plain URLs
+    /https?:\\u002F\\u002F[^"\\]+/g,     // Unicode-escaped
+    /https?:\\\/\\\/[^"\\]+/g,             // Backslash-escaped
+    /https?:\/\/[^\s"\\,\]\)]+/g,         // Plain
   ];
 
   for (const pattern of patterns) {
@@ -365,10 +379,8 @@ async function decodeGoogleNewsArticle(articleUrl) {
       }
     }
   }
-
   return null;
 }
-decodeGoogleNewsArticle._bodyLogged = false;
 
 async function scrapeOgImage(articleUrl) {
   try {
