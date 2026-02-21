@@ -161,6 +161,159 @@ header {
   color: #fff;
 }
 
+/* ─── Intelligence Banner ────────────────────────────────────── */
+
+.intel-banner {
+  background: #111827;
+  border-bottom: 1px solid #1F2937;
+}
+
+.intel-banner-inner {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 8px 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: #9CA3AF;
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+
+.intel-banner-inner::-webkit-scrollbar {
+  display: none;
+}
+
+.intel-label {
+  font-weight: 600;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.intel-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.intel-item strong {
+  color: #E5E7EB;
+  font-weight: 700;
+}
+
+.intel-high {
+  color: #F87171 !important;
+}
+
+.intel-divider {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #374151;
+  flex-shrink: 0;
+}
+
+/* ─── Severity Indicator (card left border) ──────────────────── */
+
+.story-card.severity-5,
+.story-card.severity-4 {
+  border-left: 4px solid #DC2626;
+}
+
+.story-card.severity-3 {
+  border-left: 4px solid #D97706;
+}
+
+/* ─── Severity Dot (inline) ──────────────────────────────────── */
+
+.severity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.severity-dot.sev-5 { background: #DC2626; box-shadow: 0 0 4px rgba(220,38,38,0.4); }
+.severity-dot.sev-4 { background: #DC2626; }
+.severity-dot.sev-3 { background: #D97706; }
+.severity-dot.sev-2 { background: #9CA3AF; }
+.severity-dot.sev-1 { background: #D1D5DB; }
+
+.severity-label {
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.severity-label.sev-5,
+.severity-label.sev-4 { color: #DC2626; }
+.severity-label.sev-3 { color: #D97706; }
+
+/* ─── Intel Tags (actors, regions, verification) ─────────────── */
+
+.intel-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.intel-tag {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.intel-tag.actor {
+  background: #F3F4F6;
+  color: #4B5563;
+  border: 1px solid #E5E7EB;
+}
+
+.intel-tag.region {
+  background: #EFF6FF;
+  color: #1D4ED8;
+  border: 1px solid #DBEAFE;
+}
+
+.intel-tag.verification {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
+.intel-tag.verification.confirmed {
+  background: #D1FAE5;
+  color: #065F46;
+  border: 1px solid #A7F3D0;
+}
+
+.intel-tag.verification.reported {
+  background: #DBEAFE;
+  color: #1E40AF;
+  border: 1px solid #BFDBFE;
+}
+
+.intel-tag.verification.unverified {
+  background: #F3F4F6;
+  color: #6B7280;
+  border: 1px solid #E5E7EB;
+}
+
 /* ─── Feed Main ──────────────────────────────────────────────── */
 
 .feed-main {
@@ -908,6 +1061,12 @@ footer {
 }
 
 @media (max-width: 768px) {
+  .intel-banner-inner {
+    padding: 8px 16px;
+    gap: 8px;
+    font-size: 11px;
+  }
+
   .header-inner {
     padding: 10px 16px;
   }

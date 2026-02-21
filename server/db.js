@@ -364,6 +364,70 @@ function getDataQuality() {
   };
 }
 
+// ─── Public intelligence queries ─────────────────────────────────
+
+function getEventByClusterHash(hash) {
+  if (!db) return null;
+  return db.prepare(
+    'SELECT severity, event_type, event_subtype, verification_status, confidence, actors_normalized, actors, regions, scope, rationale FROM events WHERE cluster_hash = ?'
+  ).get(hash);
+}
+
+function getIntelligenceSnapshot() {
+  if (!db) return null;
+
+  const total7d = db.prepare(
+    "SELECT COUNT(*) as count FROM events WHERE extracted_at > datetime('now', '-7 days')"
+  ).get();
+
+  const highSev7d = db.prepare(
+    "SELECT COUNT(*) as count FROM events WHERE severity >= 4 AND extracted_at > datetime('now', '-7 days')"
+  ).get();
+
+  // Top region this week
+  const regionRows = db.prepare(
+    "SELECT regions FROM events WHERE extracted_at > datetime('now', '-7 days')"
+  ).all();
+  const regionCounts = {};
+  for (const row of regionRows) {
+    try {
+      for (const r of JSON.parse(row.regions || '[]')) {
+        const n = r.trim();
+        if (n) regionCounts[n] = (regionCounts[n] || 0) + 1;
+      }
+    } catch { /* skip */ }
+  }
+  const topRegion = Object.entries(regionCounts).sort((a, b) => b[1] - a[1])[0];
+
+  // Top actor this week
+  const actorRows = db.prepare(
+    "SELECT actors_normalized, actors FROM events WHERE extracted_at > datetime('now', '-7 days')"
+  ).all();
+  const actorCounts = {};
+  for (const row of actorRows) {
+    try {
+      for (const a of JSON.parse(row.actors_normalized || row.actors || '[]')) {
+        const n = a.trim();
+        if (n) actorCounts[n] = (actorCounts[n] || 0) + 1;
+      }
+    } catch { /* skip */ }
+  }
+  const topActor = Object.entries(actorCounts).sort((a, b) => b[1] - a[1])[0];
+
+  // Severity distribution this week
+  const sevDist = db.prepare(
+    "SELECT severity, COUNT(*) as count FROM events WHERE extracted_at > datetime('now', '-7 days') GROUP BY severity ORDER BY severity"
+  ).all();
+
+  return {
+    eventsThisWeek: total7d.count,
+    highSeverityCount: highSev7d.count,
+    topRegion: topRegion ? { name: topRegion[0], count: topRegion[1] } : null,
+    topActor: topActor ? { name: topActor[0], count: topActor[1] } : null,
+    severityDistribution: sevDist,
+  };
+}
+
 // ─── Week-over-week comparison queries (for Risk Delta) ────────
 
 function getEventsForPeriod(startDate, endDate) {
@@ -468,6 +532,7 @@ module.exports = {
   initDB, clusterHash, eventExists, insertEvent, insertQuarantine,
   getEventStats, getAllEvents, getHighSeverityEvents, getTopActors, getEventsByRegion,
   getDataQuality,
+  getEventByClusterHash, getIntelligenceSnapshot,
   getEventsForPeriod, getTypeCountsForPeriod, getRegionSeverityForPeriod, getActorCountsForPeriod,
   generateUnsubToken, isUnsubscribed, addUnsubscribe, verifyUnsubToken,
 };

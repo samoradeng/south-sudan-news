@@ -29,8 +29,18 @@ const followupAnswer = document.getElementById('followup-answer');
 const discoverSection = document.getElementById('discover-section');
 const relatedStories = document.getElementById('related-stories');
 
+// ─── DOM elements (intelligence banner) ─────────────────────────
+const intelBanner = document.getElementById('intel-banner');
+const intelEvents = document.getElementById('intel-events');
+const intelHigh = document.getElementById('intel-high');
+const intelRegion = document.getElementById('intel-region');
+const intelRegionDivider = document.getElementById('intel-region-divider');
+const intelActor = document.getElementById('intel-actor');
+const intelActorDivider = document.getElementById('intel-actor-divider');
+
 // ─── Initialize ─────────────────────────────────────────────────
 loadNews();
+loadIntelligence();
 
 // ─── Event Listeners ────────────────────────────────────────────
 
@@ -104,6 +114,38 @@ async function loadNews() {
   } catch (err) {
     console.error('Failed to load news:', err);
     showError();
+  }
+}
+
+// ─── Intelligence Banner ────────────────────────────────────────
+
+async function loadIntelligence() {
+  try {
+    const res = await fetch('/api/intelligence');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (data.eventsThisWeek > 0) {
+      intelEvents.textContent = data.eventsThisWeek;
+      intelHigh.textContent = data.highSeverityCount;
+
+      if (data.topRegion) {
+        intelRegion.innerHTML = `<strong>${esc(data.topRegion.name)}</strong> highest concentration`;
+        intelRegion.style.display = '';
+        intelRegionDivider.style.display = '';
+      }
+
+      if (data.topActor) {
+        intelActor.innerHTML = `<strong>${esc(data.topActor.name)}</strong> most active`;
+        intelActor.style.display = '';
+        intelActorDivider.style.display = '';
+      }
+
+      intelBanner.style.display = 'block';
+    }
+  } catch (err) {
+    // Silently fail — banner is optional enhancement
+    console.debug('Intelligence banner not available:', err.message);
   }
 }
 
@@ -190,6 +232,8 @@ function createHeroCard(cluster, index) {
   const primary = cluster.primaryArticle;
   const timeAgo = formatTimeAgo(new Date(cluster.latestDate));
   const category = cluster.category || 'general';
+  const event = cluster.event;
+  const sevClass = event ? `severity-${event.severity}` : '';
 
   const imageHtml = cluster.image
     ? `<div class="hero-image-wrap">
@@ -199,19 +243,23 @@ function createHeroCard(cluster, index) {
     : `<div class="hero-image-wrap">${buildPlaceholder(cluster, 320)}</div>`;
 
   const sourcesHtml = buildSourceFavicons(cluster.articles, 4);
+  const intelTagsHtml = buildIntelTags(event);
 
   return `
-    <div class="story-card hero" data-story-index="${index}">
+    <div class="story-card hero ${sevClass}" data-story-index="${index}">
       ${imageHtml}
       <div class="hero-body">
         <h2 class="story-title">${esc(primary.title)}</h2>
         ${cluster.summary ? `<p class="story-summary">${esc(cluster.summary)}</p>` : ''}
+        ${intelTagsHtml}
         <div class="story-meta">
           <div class="story-sources-row">
+            ${event && event.severity >= 3 ? `<span class="severity-label sev-${event.severity}"><span class="severity-dot sev-${event.severity}"></span>Severity ${event.severity}</span>` : ''}
             ${sourcesHtml}
             <span class="source-count-badge">${cluster.sourceCount} source${cluster.sourceCount !== 1 ? 's' : ''}</span>
           </div>
           <div style="display:flex;align-items:center;gap:8px">
+            ${event ? buildVerificationBadge(event.verificationStatus) : ''}
             <span class="story-category-badge ${category}">${category}</span>
             <span class="story-time">${timeAgo}</span>
           </div>
@@ -225,6 +273,8 @@ function createRegularCard(cluster, index) {
   const primary = cluster.primaryArticle;
   const timeAgo = formatTimeAgo(new Date(cluster.latestDate));
   const category = cluster.category || 'general';
+  const event = cluster.event;
+  const sevClass = event ? `severity-${event.severity}` : '';
 
   const imageHtml = cluster.image
     ? `<div class="card-image-wrap">
@@ -233,19 +283,25 @@ function createRegularCard(cluster, index) {
     : `<div class="card-image-wrap">${buildPlaceholder(cluster, 180)}</div>`;
 
   const sourcesHtml = buildSourceFavicons(cluster.articles, 3);
+  const intelTagsHtml = buildIntelTags(event, true);
 
   return `
-    <div class="story-card regular" data-story-index="${index}">
+    <div class="story-card regular ${sevClass}" data-story-index="${index}">
       ${imageHtml}
       <div class="card-body">
         <h3 class="story-title">${esc(primary.title)}</h3>
         ${cluster.summary ? `<p class="story-summary">${esc(cluster.summary)}</p>` : ''}
+        ${intelTagsHtml}
         <div class="story-meta">
           <div class="story-sources-row">
+            ${event && event.severity >= 3 ? `<span class="severity-dot sev-${event.severity}"></span>` : ''}
             ${sourcesHtml}
             <span class="source-count-badge">${cluster.sourceCount}s</span>
           </div>
-          <span class="story-time">${timeAgo}</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            ${event ? buildVerificationBadge(event.verificationStatus) : ''}
+            <span class="story-time">${timeAgo}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -309,14 +365,28 @@ function renderStoryDetail(data) {
   const timeAgo = formatTimeAgo(new Date(data.latestDate));
   const deepSummary = data.deepSummary;
 
+  const event = data.event;
+
   // Header
   let html = `<div class="story-detail-header">`;
   html += `<h1 class="story-detail-title">${esc(primary.title)}</h1>`;
   html += `<div class="story-detail-meta">`;
+  if (event && event.severity >= 3) {
+    html += `<span class="severity-label sev-${event.severity}"><span class="severity-dot sev-${event.severity}"></span>Severity ${event.severity}/5</span>`;
+    html += `<span class="detail-dot"></span>`;
+  }
   html += `<span class="detail-time">Published ${timeAgo}</span>`;
   html += `<span class="detail-dot"></span>`;
   html += `<span class="detail-source-count">${data.sourceCount} source${data.sourceCount !== 1 ? 's' : ''}</span>`;
+  if (event && event.verificationStatus) {
+    html += `<span class="detail-dot"></span>`;
+    html += buildVerificationBadge(event.verificationStatus);
+  }
   html += `</div>`;
+  // Intelligence tags (regions + actors)
+  if (event) {
+    html += buildIntelTags(event, false);
+  }
 
   // Source favicons row
   html += `<div class="story-detail-sources">`;
@@ -527,6 +597,35 @@ function showEmpty() {
   loadingEl.style.display = 'none';
   errorEl.style.display = 'none';
   emptyEl.style.display = 'block';
+}
+
+// ─── Intelligence Helpers ────────────────────────────────────────
+
+function buildIntelTags(event, compact) {
+  if (!event) return '';
+  const tags = [];
+
+  // Regions (max 2)
+  if (event.regions && event.regions.length > 0) {
+    event.regions.slice(0, compact ? 1 : 2).forEach((r) => {
+      tags.push(`<span class="intel-tag region">${esc(r)}</span>`);
+    });
+  }
+
+  // Actors (max 2, or 1 in compact mode)
+  if (event.actors && event.actors.length > 0) {
+    event.actors.slice(0, compact ? 1 : 2).forEach((a) => {
+      tags.push(`<span class="intel-tag actor">${esc(a)}</span>`);
+    });
+  }
+
+  if (tags.length === 0) return '';
+  return `<div class="intel-tags">${tags.join('')}</div>`;
+}
+
+function buildVerificationBadge(status) {
+  if (!status) return '';
+  return `<span class="intel-tag verification ${status}">${esc(status)}</span>`;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
